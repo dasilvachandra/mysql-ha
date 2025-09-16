@@ -1,8 +1,12 @@
-# Ignore MySQL data
+# Ignore MySQL data directory
 mysql/data/*
 !mysql/data/.gitkeep
 
-# Ignore OS / editor junk
+# Ignore system/OS junk files
+.DS_Store
+Thumbs.db
+
+# Ignore editor swap/backup files
 *.swp
 *.swo
-.DS_Store
+*~
