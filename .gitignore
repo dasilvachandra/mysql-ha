@@ -1,0 +1,8 @@
+# Ignore MySQL data
+mysql/data/*
+!mysql/data/.gitkeep
+
+# Ignore OS / editor junk
+*.swp
+*.swo
+.DS_Store
