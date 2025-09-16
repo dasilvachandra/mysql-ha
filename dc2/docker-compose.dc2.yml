@@ -1,4 +1,4 @@
-version: '3'
+version: '3.8'
 
 networks:
   zabbix_net:
@@ -22,4 +22,4 @@ services:
       - "3306:3306"
     networks:
       zabbix_net:
-        ipv4_address: 10.11.12.4
+        ipv4_address: 10.11.12.3

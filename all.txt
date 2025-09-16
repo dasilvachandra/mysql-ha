@@ -6,276 +6,202 @@ MIT License
 ====================== ./README.md ======================
 📦 mysql-ha
 
-Cluster MySQL High Availability lintas Data Center menggunakan WireGuard VPN, HAProxy, dan Keepalived.
-Proyek ini menyediakan struktur direktori, konfigurasi, dan contoh deployment untuk membangun replikasi MySQL dengan failover otomatis menggunakan VIP yang berpindah antar-DC.
+Cluster **MySQL + Zabbix High Availability** lintas Data Center menggunakan **WireGuard VPN** dan **HAProxy VIP**.  
+Proyek ini menyediakan struktur direktori, konfigurasi, dan contoh deployment untuk membangun replikasi MySQL dengan failover otomatis dan integrasi Zabbix HA.
 
 ✨ Fitur
 
-🔒 WireGuard VPN sebagai tunnel antar-DC.
-
-🗄️ MySQL Group Replication (single-primary) untuk sinkronisasi data.
-
-⚖️ HAProxy sebagai load balancer MySQL.
-
-🛡️ Keepalived untuk virtual IP (VIP) failover antar node/DC.
-
-📂 Struktur direktori modular (dc1/, dc2/, mysql/, docs/) agar mudah dikelola dan dikembangkan.
+🔒 WireGuard VPN sebagai tunnel antar-DC.  
+🗄️ MySQL Group Replication (single-primary) untuk sinkronisasi data.  
+⚖️ HAProxy di hub sebagai load balancer sekaligus Virtual IP (VIP).  
+📊 Zabbix server & frontend berjalan di DC1 dan DC2 dengan HA mode.  
+📂 Struktur direktori modular (dc1/, dc2/, mysql/, zabbix/, hub/, docs/).
 
 📂 Struktur Direktori
+
 mysql-ha/
-├── dc1/                  # Konfigurasi & compose untuk Data Center 1
-├── dc2/                  # Konfigurasi & compose untuk Data Center 2
-├── mysql/                # Konfigurasi MySQL (Group Replication)
-├── docs/                 # Dokumentasi & catatan implementasi
+├── dc1/          # Konfigurasi & compose untuk Data Center 1 (MySQL, Zabbix)
+├── dc2/          # Konfigurasi & compose untuk Data Center 2 (MySQL, Zabbix)
+├── hub/          # HAProxy VIP untuk MySQL & Zabbix
+├── mysql/        # Konfigurasi MySQL Group Replication
+├── zabbix/       # Dockerfile & compose Zabbix server + frontend
+├── docs/         # Dokumentasi & catatan implementasi
 
 🚀 Tujuan
 
-Memberikan kerangka kerja (scaffold) untuk eksperimen dan implementasi MySQL HA lintas DC.
-
-Memisahkan konfigurasi per DC agar mudah dimodifikasi sesuai kebutuhan.
-
-Mendukung deployment berbasis Docker Compose maupun integrasi ke sistem produksi.
-
-====================== ./all.txt ======================
-
+- Memberikan kerangka kerja (scaffold) untuk eksperimen dan implementasi MySQL + Zabbix HA lintas DC.  
+- Memisahkan konfigurasi per DC agar mudah dimodifikasi sesuai kebutuhan.  
+- Mendukung deployment berbasis Docker Compose maupun integrasi ke sistem produksi.
 
 ====================== ./dc1/docker-compose.dc1.yml ======================
-version: "3.8"
+version: '3.8'
 
 networks:
-  intra-ha:
+  zabbix_net:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.1.0/24   # subnet khusus DC1
+        - subnet: 10.11.12.0/24
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: mysql-dc1
-    restart: always
+  mysql1:
+    image: mysql:8.0.30
+    container_name: mysql1
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
     volumes:
-      - ../mysql/data:/var/lib/mysql
+      - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf
+      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
     networks:
-      intra-ha:
-        ipv4_address: 172.20.1.10
+      zabbix_net:
+        ipv4_address: 10.11.12.2
 
-  haproxy-keepalived:
-    image: haproxy:2.8
-    container_name: haproxy-keepalived-dc1
-    network_mode: "host"
-    cap_add:
-      - NET_ADMIN
-      - NET_BROADCAST
-      - NET_RAW
-    environment:
-      KEEPALIVED_PRIORITY: 150
-    volumes:
-      - ./haproxy-keepalived/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
-      - ./haproxy-keepalived/keepalived.conf:/etc/keepalived/keepalived.conf
-    depends_on:
-      - mysql
+====================== ./dc1/zabbix/Dockerfile ======================
+FROM zabbix/zabbix-server-mysql:alpine-6.4-latest
 
+LABEL maintainer="Andes Solutions"
 
-====================== ./dc1/haproxy-keepalived/haproxy.cfg ======================
-global
-  maxconn 2048
+# Copy custom config (opsional)
+COPY zabbix_server.conf /etc/zabbix/zabbix_server.conf
 
-defaults
-  log global
-  mode tcp
-  timeout connect 3s
-  timeout client  30s
-  timeout server  30s
+# Tambahkan package/tools jika perlu
+RUN apk add --no-cache bash curl vim
 
-listen mysql_vip
-  bind 10.7.0.10:3306
-  option tcplog
-  balance first
-  server db_local 127.0.0.1:3306 check inter 2s fall 2 rise 2
-
-
-====================== ./dc1/haproxy-keepalived/keepalived.conf ======================
-vrrp_instance VI_10 {
-  state BACKUP
-  interface wg0
-  virtual_router_id 10
-  priority 150
-  advert_int 1
-  authentication {
-    auth_type PASS
-    auth_pass SomeSecret
-  }
-  virtual_ipaddress {
-    10.7.0.10/24 dev wg0
-  }
-  track_script {
-    chk_mysql
-  }
-}
-
-vrrp_script chk_mysql {
-  script "/usr/local/bin/check-mysql.sh"
-  interval 2
-  fall 2
-  rise 2
-}
-
-
-====================== ./dc1/scripts/auto-route.sh ======================
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Optional: hanya jika tidak pakai PostUp di wg0.conf
-DC=DC1
-
-# tunggu interface wg0
-for i in {1..20}; do
-  ip link show wg0 &>/dev/null && break
-  sleep 1
-done
-
-if ! ip link show wg0 &>/dev/null; then
-  echo "wg0 tidak ditemukan, pastikan WireGuard aktif." >&2
-  exit 1
-fi
-
-# Tambah route ke subnet DC2
-ip route replace 172.20.2.0/24 via 10.7.0.5 dev wg0
-
+EXPOSE 10051
+CMD ["docker-entrypoint.sh"]
 
 ====================== ./dc2/docker-compose.dc2.yml ======================
-version: "3.8"
+version: '3.8'
 
 networks:
-  intra-ha:
+  zabbix_net:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.2.0/24   # subnet khusus DC2
+        - subnet: 10.11.12.0/24
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: mysql-dc2
-    restart: always
+  mysql2:
+    image: mysql:8.0.30
+    container_name: mysql2
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
     volumes:
-      - ../mysql/data:/var/lib/mysql
+      - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf
+      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
     networks:
-      intra-ha:
-        ipv4_address: 172.20.2.10
-
-  haproxy-keepalived:
-    image: haproxy:2.8
-    container_name: haproxy-keepalived-dc2
-    network_mode: "host"
-    cap_add:
-      - NET_ADMIN
-      - NET_BROADCAST
-      - NET_RAW
-    environment:
-      KEEPALIVED_PRIORITY: 100
-    volumes:
-      - ./haproxy-keepalived/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
-      - ./haproxy-keepalived/keepalived.conf:/etc/keepalived/keepalived.conf
-    depends_on:
-      - mysql
-
-
-====================== ./dc2/haproxy-keepalived/haproxy.cfg ======================
-global
-  maxconn 2048
-
-defaults
-  log global
-  mode tcp
-  timeout connect 3s
-  timeout client  30s
-  timeout server  30s
-
-listen mysql_vip
-  bind 10.7.0.10:3306
-  option tcplog
-  balance first
-  server db_local 127.0.0.1:3306 check inter 2s fall 2 rise 2
-
-
-====================== ./dc2/haproxy-keepalived/keepalived.conf ======================
-vrrp_instance VI_10 {
-  state BACKUP
-  interface wg0
-  virtual_router_id 10
-  priority 100
-  advert_int 1
-  authentication {
-    auth_type PASS
-    auth_pass SomeSecret
-  }
-  virtual_ipaddress {
-    10.7.0.10/24 dev wg0
-  }
-  track_script {
-    chk_mysql
-  }
-}
-
-vrrp_script chk_mysql {
-  script "/usr/local/bin/check-mysql.sh"
-  interval 2
-  fall 2
-  rise 2
-}
-
-
-====================== ./dc2/scripts/auto-route.sh ======================
-#!/usr/bin/env bash
-set -euo pipefail
-
-DC=DC2
-
-# tunggu interface wg0
-for i in {1..20}; do
-  ip link show wg0 &>/dev/null && break
-  sleep 1
-done
-
-if ! ip link show wg0 &>/dev/null; then
-  echo "wg0 tidak ditemukan, pastikan WireGuard aktif." >&2
-  exit 1
-fi
-
-# Tambah route ke subnet DC1
-ip route replace 172.20.1.0/24 via 10.7.0.4 dev wg0
-
+      zabbix_net:
+        ipv4_address: 10.11.12.3
 
 ====================== ./docs/README.md ======================
 # mysql-ha
 
-Cluster **MySQL High Availability** lintas Data Center menggunakan **WireGuard VPN**, **HAProxy**, dan **Keepalived**.
+Cluster **MySQL High Availability + Zabbix HA** lintas Data Center menggunakan **WireGuard VPN** dan **HAProxy VIP**.
 
 ## Struktur Direktori
-- `dc1/`, `dc2/` → konfigurasi per Data Center (docker-compose, HAProxy, Keepalived, script).
-- `mysql/` → konfigurasi MySQL Group Replication untuk DC1 & DC2.
+- `dc1/`, `dc2/` → konfigurasi per Data Center (docker-compose untuk MySQL & Zabbix).  
+- `hub/` → HAProxy di hub, menyediakan Virtual IP (VIP) untuk failover.  
+- `mysql/` → konfigurasi MySQL Group Replication.  
+- `zabbix/` → konfigurasi Zabbix server & frontend.  
 - `docs/` → catatan & dokumentasi bootstrap.
 
-## Catatan
-- WireGuard sudah di-setup langsung di host (bukan container).
-- Route antar-subnet container (172.20.1.0/24 ↔ 172.20.2.0/24) dilewatkan via `wg0` host.
-- Keepalived mengatur VIP `10.7.0.10` di interface `wg0`.
-- MySQL dijalankan dengan **Group Replication single-primary**.
+## Mekanisme HA
+- **Database** direplikasi menggunakan **MySQL Group Replication** (single-primary mode) antara DC1 & DC2.  
+- **HAProxy di hub** menyediakan Virtual IP (**10.7.0.100**) untuk semua layanan:  
+  - `10.7.0.100:3306` → MySQL cluster  
+  - `10.7.0.100:10051` → Zabbix server  
+  - `10.7.0.100:8080` → Zabbix frontend (Web UI)  
+- **Zabbix Server** berjalan di DC1 & DC2 dengan HA mode (HANodeName berbeda, hanya 1 node aktif).  
+- **Zabbix Frontend** tersedia di kedua DC, diakses melalui VIP hub.
 
+## Catatan
+- WireGuard harus sudah dikonfigurasi di host (bukan container).  
+- Semua container berada dalam network `zabbix_net` (10.11.12.0/24).  
+- IP host digunakan untuk komunikasi **Group Replication** antar-DC (10.7.0.4, 10.7.0.5).  
+- Tidak ada Keepalived, failover murni di-handle oleh **HAProxy di hub**.
+
+====================== ./hub/docker-compose.yml ======================
+version: '3.8'
+
+services:
+  haproxy:
+    image: haproxy:2.8
+    container_name: haproxy-hub
+    restart: unless-stopped
+    network_mode: "host"   # supaya bisa listen langsung ke IP VIP hub
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+
+====================== ./hub/haproxy.cfg ======================
+global
+    log /dev/log local0
+    maxconn 2048
+
+defaults
+    log global
+    mode tcp
+    option tcplog
+    retries 3
+    timeout connect 5s
+    timeout client  60s
+    timeout server  60s
+
+# =========================
+# MySQL Cluster
+# =========================
+frontend mysql_front
+    bind 10.7.0.100:3306
+    default_backend mysql_cluster
+
+backend mysql_cluster
+    mode tcp
+    option tcp-check
+    tcp-check connect port 3306
+    balance first
+    server dc1-db 10.11.12.2:3306 check inter 2s fall 3 rise 2
+    server dc2-db 10.11.12.4:3306 check inter 2s fall 3 rise 2 backup
+
+# =========================
+# Zabbix Server (port 10051)
+# =========================
+frontend zabbix_server_front
+    bind 10.7.0.100:10051
+    default_backend zabbix_servers
+
+backend zabbix_servers
+    mode tcp
+    option tcp-check
+    balance first
+    server dc1-zbx 10.7.0.2:10051 check inter 2s fall 3 rise 2
+    server dc2-zbx 10.7.0.3:10051 check inter 2s fall 3 rise 2 backup
+
+# =========================
+# Zabbix Frontend (Web UI)
+# =========================
+frontend zabbix_web_front
+    bind 10.7.0.100:8080
+    default_backend zabbix_webs
+
+backend zabbix_webs
+    mode tcp
+    option tcp-check
+    balance first
+    server dc1-web 10.7.0.4:8080 check inter 2s fall 3 rise 2
+    server dc2-web 10.7.0.5:8080 check inter 2s fall 3 rise 2 backup
 
 ====================== ./list_files.sh ======================
 #!/bin/bash
 
 # Folder atau file yang akan diabaikan (boleh wildcard)
-IGNORED_DIRS=(".git" "node_modules" "*.log" "*.tmp")
+IGNORED_DIRS=(".git" "node_modules" "*.log" "*.txt")
 
 # File output gabungan
 OUTPUT_FILE="all.txt"
@@ -326,6 +252,16 @@ echo ""
 echo "✅ Semua isi file tersimpan ke: $OUTPUT_FILE"
 
 
+====================== ./mysql/init.sql ======================
+DROP DATABASE IF EXISTS zabbix;
+CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
+DROP USER IF EXISTS 'zabbix'@'%';
+CREATE USER 'zabbix'@'%' IDENTIFIED BY 'AndesZabbix!';
+GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'%';
+
+SET GLOBAL log_bin_trust_function_creators = 1;
+
 ====================== ./mysql/my.cnf.dc1 ======================
 [mysqld]
 server_id=1
@@ -346,7 +282,6 @@ loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF
 
-
 ====================== ./mysql/my.cnf.dc2 ======================
 [mysqld]
 server_id=2
@@ -366,4 +301,3 @@ loose-group_replication_local_address="10.7.0.5:33061"
 loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF
-

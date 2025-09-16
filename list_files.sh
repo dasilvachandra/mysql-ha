@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Folder atau file yang akan diabaikan (boleh wildcard)
-IGNORED_DIRS=(".git" "node_modules" "*.log" "*.tmp")
+IGNORED_DIRS=(".git" "node_modules" "*.log" "*.txt")
 
 # File output gabungan
 OUTPUT_FILE="all.txt"
