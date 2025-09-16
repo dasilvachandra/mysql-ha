@@ -1,6 +1,8 @@
 [mysqld]
 server_id=2
 bind-address=0.0.0.0
+
+# Binary log untuk GTID
 log_bin=binlog
 gtid_mode=ON
 enforce_gtid_consistency=ON
@@ -9,10 +11,10 @@ master_info_repository=TABLE
 relay_log_info_repository=TABLE
 transaction_write_set_extraction=XXHASH64
 
-# Group Replication
+# Group Replication Config
 loose-group_replication_group_name="b9a2b7a2-5f4c-4f8c-9b2e-1c1d9f00a001"
 loose-group_replication_start_on_boot=OFF
-loose-group_replication_local_address="10.7.0.5:33061"
-loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
+loose-group_replication_local_address="10.11.12.3:33061"
+loose-group_replication_group_seeds="10.11.12.2:33061,10.11.12.3:33061"
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF

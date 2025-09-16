@@ -164,10 +164,9 @@ frontend mysql_front
 backend mysql_cluster
     mode tcp
     option tcp-check
-    tcp-check connect port 3306
     balance first
-    server dc1-db 10.11.12.2:3306 check inter 2s fall 3 rise 2
-    server dc2-db 10.11.12.4:3306 check inter 2s fall 3 rise 2 backup
+    server dc1-db 10.7.0.4:3306 check inter 2s fall 3 rise 2
+    server dc2-db 10.7.0.5:3306 check inter 2s fall 3 rise 2 backup
 
 # =========================
 # Zabbix Server (port 10051)
@@ -180,8 +179,8 @@ backend zabbix_servers
     mode tcp
     option tcp-check
     balance first
-    server dc1-zbx 10.7.0.2:10051 check inter 2s fall 3 rise 2
-    server dc2-zbx 10.7.0.3:10051 check inter 2s fall 3 rise 2 backup
+    server dc1-zbx 10.7.0.4:10051 check inter 2s fall 3 rise 2
+    server dc2-zbx 10.7.0.5:10051 check inter 2s fall 3 rise 2 backup
 
 # =========================
 # Zabbix Frontend (Web UI)
