@@ -1,0 +1,38 @@
+version: "3.8"
+
+networks:
+  intra-ha:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.1.0/24   # subnet khusus DC1
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-dc1
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+    volumes:
+      - ../mysql/data:/var/lib/mysql
+      - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf
+    networks:
+      intra-ha:
+        ipv4_address: 172.20.1.10
+
+  haproxy-keepalived:
+    image: haproxy:2.8
+    container_name: haproxy-keepalived-dc1
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_BROADCAST
+      - NET_RAW
+    environment:
+      KEEPALIVED_PRIORITY: 150
+    volumes:
+      - ./haproxy-keepalived/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
+      - ./haproxy-keepalived/keepalived.conf:/etc/keepalived/keepalived.conf
+    depends_on:
+      - mysql
