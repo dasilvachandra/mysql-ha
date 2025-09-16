@@ -1,0 +1,27 @@
+# DC1
+cd ~/mysql-ha/dc1
+docker compose -f docker-compose.dc1.yml down
+docker compose -f docker-compose.dc1.yml up -d
+
+# DC2
+cd ~/mysql-ha/dc2
+docker compose -f docker-compose.dc2.yml down
+docker compose -f docker-compose.dc2.yml up -d
+
+Lalu bootstrap cluster dari DC1:
+
+-- di DC1 mysql
+SET GLOBAL group_replication_bootstrap_group=ON;
+START GROUP_REPLICATION;
+SET GLOBAL group_replication_bootstrap_group=OFF;
+
+Kemudian join dari DC2:
+
+-- di DC2 mysql
+START GROUP_REPLICATION;
+
+Dan cek status:
+
+SELECT MEMBER_ID, MEMBER_HOST, MEMBER_PORT, MEMBER_STATE 
+FROM performance_schema.replication_group_members;
+
