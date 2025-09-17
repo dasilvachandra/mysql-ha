@@ -1,3 +1,6 @@
+version: '3.8'
+
+services:
   # === MySQL DC1 ===
   mysql1:
     build:
@@ -14,3 +17,40 @@
     ports:
       - "3306:3306"
       - "33061:33061"   # 👈 tambahkan ini
+
+  # === Zabbix Server DC1 ===
+  zabbix-server:
+    build:
+      context: ../zabbix
+      dockerfile: Dockerfile.server
+    container_name: zbx-server-dc1
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      HANodeName: "dc1"
+    ports:
+      - "10051:10051"
+    depends_on:
+      - mysql1
+
+  # === Zabbix Web DC1 ===
+  zabbix-web:
+    build:
+      context: ../zabbix
+      dockerfile: Dockerfile.web
+    container_name: zbx-web-dc1
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      ZBX_SERVER_HOST: "127.0.0.1"
+      PHP_TZ: "Asia/Jakarta"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - zabbix-server
