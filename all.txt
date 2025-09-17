@@ -34,8 +34,12 @@ mysql-ha/
 - Mendukung deployment berbasis Docker Compose maupun integrasi ke sistem produksi.
 
 ====================== ./dc1/docker-compose.yml ======================
+version: "3.9"
+
 services:
-  # === MySQL DC1 (bind ke IP host: 10.7.0.4) ===
+  # =========================
+  # MySQL DC1 (10.7.0.4)
+  # =========================
   mysql1:
     build:
       context: ../mysql
@@ -49,16 +53,18 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    # Penting: supaya mysqld bisa bind ke 10.7.0.4:33061 (XCom)
-    network_mode: "host"
-    # Jangan pakai "ports:" di host-mode
+    # HANYA expose 3306 (tidak pakai host network)
+    ports:
+      - "3306:3306"
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s
       timeout: 3s
       retries: 20
 
-  # === Zabbix Server DC1 ===
+  # =========================
+  # Zabbix Server DC1
+  # =========================
   zabbix-server:
     build:
       context: ../zabbix
@@ -66,13 +72,13 @@ services:
     container_name: zbx-server-dc1
     restart: unless-stopped
     environment:
-      # Arahkan ke VIP DB (Keepalived 10.7.0.10). Jika pakai HAProxy hub, ganti ke 10.7.0.100
-      DB_SERVER_HOST: "10.7.0.10"
+      DB_SERVER_HOST: "10.7.0.10"     # VIP DB (ikut failover)
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
       HANodeName: "dc1"
       TZ: "Asia/Jakarta"
+    # publish ke host agar HAProxy (host net) bisa forward ke 127.0.0.1:10051
     ports:
       - "10051:10051"
     depends_on:
@@ -83,7 +89,9 @@ services:
       timeout: 3s
       retries: 30
 
-  # === Zabbix Web DC1 ===
+  # =========================
+  # Zabbix Web DC1
+  # =========================
   zabbix-web:
     build:
       context: ../zabbix
@@ -91,14 +99,14 @@ services:
     container_name: zbx-web-dc1
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"
+      DB_SERVER_HOST: "10.7.0.10"     # VIP DB
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
       ZBX_SERVER_HOST: "127.0.0.1"
       PHP_TZ: "Asia/Jakarta"
     ports:
-      - "8080:8080"
+      - "8080:8080"                   # HAProxy konsumsi di 127.0.0.1:8080
     depends_on:
       - zabbix-server
     healthcheck:
@@ -107,40 +115,126 @@ services:
       timeout: 3s
       retries: 30
 
+  # =========================
+  # HAProxy (bind ke VIP 10.7.0.10)
+  # =========================
+  haproxy:
+    build:
+      context: ./haproxy
+      dockerfile: Dockerfile
+    container_name: haproxy-dc1
+    restart: unless-stopped
+    network_mode: "host"              # WAJIB agar bisa bind ke VIP host
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - mysql1
+      - zabbix-server
+      - zabbix-web
+
+
+====================== ./dc1/haproxy/Dockerfile ======================
+FROM haproxy:2.8
+RUN apt-get update && apt-get install -y iputils-ping dnsutils curl vim && rm -rf /var/lib/apt/lists/*
+CMD ["haproxy","-f","/usr/local/etc/haproxy/haproxy.cfg"]
+
+
+====================== ./dc1/haproxy/haproxy.cfg ======================
+global
+    log /dev/log local0
+    maxconn 4096
+
+defaults
+    log global
+    mode tcp
+    option tcplog
+    timeout connect 5s
+    timeout client  60s
+    timeout server  60s
+    retries 3
+
+# =========================
+# MySQL via VIP (user/app connect ke 10.7.0.10:3306)
+# =========================
+frontend mysql_front
+    bind 10.7.0.10:3306
+    default_backend mysql_local
+
+backend mysql_local
+    mode tcp
+    option tcp-check
+    # Teruskan ke mysqld lokal node ini
+    server localmysql 127.0.0.1:3306 check inter 2s fall 3 rise 2
+
+# =========================
+# Zabbix Server (10051) via VIP
+# =========================
+frontend zabbix_server_front
+    bind 10.7.0.10:10051
+    default_backend zabbix_server_local
+
+backend zabbix_server_local
+    mode tcp
+    option tcp-check
+    server localzbx 127.0.0.1:10051 check inter 2s fall 3 rise 2
+
+# =========================
+# Zabbix Web (8080) via VIP
+# =========================
+frontend zabbix_web_front
+    bind 10.7.0.10:8080
+    default_backend zabbix_web_local
+
+backend zabbix_web_local
+    mode tcp
+    option tcp-check
+    server localweb 127.0.0.1:8080 check inter 2s fall 3 rise 2
+
 
 ====================== ./dc1/keepalived/keepalived.conf ======================
 global_defs {
-    script_user root
-    enable_script_security
+  script_user root
+  enable_script_security
 }
 
-vrrp_instance VI_1 {
-    state BACKUP
-    interface wg0
-    virtual_router_id 51
-    priority 200
-    advert_int 1
-    initial_state BACKUP
-    nopreempt
-    
-    authentication {
-        auth_type PASS
-        auth_pass 1234
-    }
+vrrp_script chk_mysql_primary {
+  script "/etc/keepalived/scripts/is_primary.sh"
+  interval 3
+  timeout 2
+  rise 2
+  fall 2
+}
 
-    # Unicast karena WireGuard tidak support multicast
-    unicast_src_ip 10.7.0.4
-    unicast_peer {
-        10.7.0.5
-    }
+vrrp_instance VI_DB {
+  state BACKUP
+  interface wg0
+  virtual_router_id 51
+  priority 200
+  advert_int 1
+  nopreempt
 
-    virtual_ipaddress {
-        10.7.0.10/32 dev wg0 label wg0:vip
-    }
+  authentication {
+    auth_type PASS
+    auth_pass 1234
+  }
 
-    notify_master "/etc/keepalived/scripts/notify.sh master"
-    notify_backup "/etc/keepalived/scripts/notify.sh backup"
-    notify_fault  "/etc/keepalived/scripts/notify.sh fault"
+  unicast_src_ip 10.7.0.4
+  unicast_peer {
+    10.7.0.5
+  }
+
+  virtual_ipaddress {
+    10.7.0.10/32 dev wg0 label wg0:vip
+  }
+
+  # Hanya pegang VIP jika script return 0 (PRIMARY)
+  track_script {
+    chk_mysql_primary
+  }
+
+  notify_master "/etc/keepalived/scripts/notify.sh master"
+  notify_backup "/etc/keepalived/scripts/notify.sh backup"
+  notify_fault  "/etc/keepalived/scripts/notify.sh fault"
 }
 
 
@@ -148,6 +242,27 @@ vrrp_instance VI_1 {
 [Unit]
 After=network-online.target wg-quick@wg0.service
 Wants=network-online.target wg-quick@wg0.service
+
+====================== ./dc1/keepalived/scripts/is_primary.sh ======================
+#!/usr/bin/env bash
+set -euo pipefail
+
+MYSQL_HOST="127.0.0.1"
+MYSQL_USER="root"
+MYSQL_PASS="abcdef"
+
+# 1) mysqld hidup?
+if ! mysqladmin ping -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" --silent; then
+  exit 1
+fi
+
+# 2) node ini PRIMARY?
+ROLE="$(mysql -N -B -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" \
+  -e "SELECT MEMBER_ROLE FROM performance_schema.replication_group_members
+      WHERE MEMBER_HOST = @@report_host LIMIT 1;" 2>/dev/null || echo "")"
+
+[[ "$ROLE" == "PRIMARY" ]] && exit 0 || exit 2
+
 
 ====================== ./dc1/keepalived/scripts/notify.sh ======================
 #!/usr/bin/env bash
@@ -187,8 +302,12 @@ EXPOSE 10051
 CMD ["docker-entrypoint.sh"]
 
 ====================== ./dc2/docker-compose.yml ======================
+version: "3.9"
+
 services:
-  # === MySQL DC2 ===
+  # =========================
+  # MySQL DC2 (10.7.0.5)
+  # =========================
   mysql2:
     build:
       context: ../mysql
@@ -204,14 +323,15 @@ services:
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "3306:3306"
-      - "33061:33061"
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s
       timeout: 3s
-      retries: 10
+      retries: 20
 
-  # === Zabbix Server DC2 ===
+  # =========================
+  # Zabbix Server DC2
+  # =========================
   zabbix-server:
     build:
       context: ../zabbix
@@ -219,7 +339,7 @@ services:
     container_name: zbx-server-dc2
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"     # sama VIP DB
+      DB_SERVER_HOST: "10.7.0.10"     # VIP DB (ikut failover)
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
@@ -233,9 +353,11 @@ services:
       test: ["CMD-SHELL", "timeout 3 bash -lc '</dev/tcp/127.0.0.1/10051' || exit 1"]
       interval: 10s
       timeout: 3s
-      retries: 20
+      retries: 30
 
-  # === Zabbix Web DC2 ===
+  # =========================
+  # Zabbix Web DC2
+  # =========================
   zabbix-web:
     build:
       context: ../zabbix
@@ -243,7 +365,7 @@ services:
     container_name: zbx-web-dc2
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"
+      DB_SERVER_HOST: "10.7.0.10"     # VIP DB
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
@@ -257,41 +379,69 @@ services:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ || exit 1"]
       interval: 10s
       timeout: 3s
-      retries: 20
+      retries: 30
+
+  # =========================
+  # HAProxy (bind ke VIP 10.7.0.10)
+  # =========================
+  haproxy:
+    build:
+      context: ./haproxy
+      dockerfile: Dockerfile
+    container_name: haproxy-dc2
+    restart: unless-stopped
+    network_mode: "host"              # wajib supaya bisa bind ke VIP
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - mysql2
+      - zabbix-server
+      - zabbix-web
 
 
 ====================== ./dc2/keepalived/keepalived.conf ======================
 global_defs {
-    script_user root
-    enable_script_security
+  script_user root
+  enable_script_security
 }
 
-vrrp_instance VI_1 {
-    state BACKUP
-    interface wg0
-    virtual_router_id 51
-    priority 150
-    advert_int 1
-    initial_state BACKUP
-    nopreempt
+vrrp_script chk_mysql_primary {
+  script "/etc/keepalived/scripts/is_primary.sh"
+  interval 3
+  timeout 2
+  rise 2
+  fall 2
+}
 
-    authentication {
-        auth_type PASS
-        auth_pass 1234
-    }
+vrrp_instance VI_DB {
+  state BACKUP
+  interface wg0
+  virtual_router_id 51
+  priority 150
+  advert_int 1
+  nopreempt
 
-    unicast_src_ip 10.7.0.5
-    unicast_peer {
-        10.7.0.4
-    }
+  authentication {
+    auth_type PASS
+    auth_pass 1234
+  }
 
-    virtual_ipaddress {
-        10.7.0.10/32 dev wg0 label wg0:vip
-    }
+  unicast_src_ip 10.7.0.5
+  unicast_peer {
+    10.7.0.4
+  }
 
-    notify_master "/etc/keepalived/scripts/notify.sh master"
-    notify_backup "/etc/keepalived/scripts/notify.sh backup"
-    notify_fault  "/etc/keepalived/scripts/notify.sh fault"
+  virtual_ipaddress {
+    10.7.0.10/32 dev wg0 label wg0:vip
+  }
+
+  track_script {
+    chk_mysql_primary
+  }
+
+  notify_master "/etc/keepalived/scripts/notify.sh master"
+  notify_backup "/etc/keepalived/scripts/notify.sh backup"
+  notify_fault  "/etc/keepalived/scripts/notify.sh fault"
 }
 
 
@@ -299,6 +449,27 @@ vrrp_instance VI_1 {
 [Unit]
 After=network-online.target wg-quick@wg0.service
 Wants=network-online.target wg-quick@wg0.service
+
+====================== ./dc2/keepalived/scripts/is_primary.sh ======================
+#!/usr/bin/env bash
+set -euo pipefail
+
+MYSQL_HOST="127.0.0.1"
+MYSQL_USER="root"
+MYSQL_PASS="abcdef"
+
+# 1) mysqld hidup?
+if ! mysqladmin ping -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" --silent; then
+  exit 1
+fi
+
+# 2) node ini PRIMARY?
+ROLE="$(mysql -N -B -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" \
+  -e "SELECT MEMBER_ROLE FROM performance_schema.replication_group_members
+      WHERE MEMBER_HOST = @@report_host LIMIT 1;" 2>/dev/null || echo "")"
+
+[[ "$ROLE" == "PRIMARY" ]] && exit 0 || exit 2
+
 
 ====================== ./dc2/keepalived/scripts/notify.sh ======================
 #!/usr/bin/env bash
@@ -384,200 +555,6 @@ git commit -m "update: $TIMESTAMP"
 echo "🚀 Push ke remote (origin main)..."
 git push origin main
 
-====================== ./hub/Dockerfile ======================
-FROM haproxy:2.8
-
-LABEL maintainer="Andes Solutions"
-
-# Tambahkan tools troubleshooting
-RUN apt-get update && \
-    apt-get install -y iputils-ping net-tools iproute2 dnsutils curl vim traceroute tcpdump && \
-    rm -rf /var/lib/apt/lists/*
-
-CMD ["haproxy", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
-
-
-====================== ./hub/docker-compose.yml ======================
-services:
-  # === MySQL DC2 (bind ke IP host: 10.7.0.5) ===
-  mysql2:
-    build:
-      context: ../mysql
-      dockerfile: Dockerfile
-    container_name: mysql2
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
-      TZ: "Asia/Jakarta"
-    volumes:
-      - /opt/mysql:/var/lib/mysql
-      - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf:ro
-      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    network_mode: "host"
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
-      interval: 10s
-      timeout: 3s
-      retries: 20
-
-  # === Zabbix Server DC2 ===
-  zabbix-server:
-    build:
-      context: ../zabbix
-      dockerfile: Dockerfile.server
-    container_name: zbx-server-dc2
-    restart: unless-stopped
-    environment:
-      DB_SERVER_HOST: "10.7.0.10"
-      MYSQL_DATABASE: "zabbix"
-      MYSQL_USER: "zabbix"
-      MYSQL_PASSWORD: "AndesZabbix!"
-      HANodeName: "dc2"
-      TZ: "Asia/Jakarta"
-    ports:
-      - "10051:10051"
-    depends_on:
-      - mysql2
-    healthcheck:
-      test: ["CMD-SHELL", "timeout 3 bash -lc '</dev/tcp/127.0.0.1/10051' || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 30
-
-  # === Zabbix Web DC2 ===
-  zabbix-web:
-    build:
-      context: ../zabbix
-      dockerfile: Dockerfile.web
-    container_name: zbx-web-dc2
-    restart: unless-stopped
-    environment:
-      DB_SERVER_HOST: "10.7.0.10"
-      MYSQL_DATABASE: "zabbix"
-      MYSQL_USER: "zabbix"
-      MYSQL_PASSWORD: "AndesZabbix!"
-      ZBX_SERVER_HOST: "127.0.0.1"
-      PHP_TZ: "Asia/Jakarta"
-    ports:
-      - "8080:8080"
-    depends_on:
-      - zabbix-server
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 30
-
-
-====================== ./hub/haproxy.cfg ======================
-global
-    log /dev/log local0
-    maxconn 2048
-
-defaults
-    log global
-    mode tcp
-    option tcplog
-    retries 3
-    timeout connect 5s
-    timeout client  60s
-    timeout server  60s
-
-# =========================
-# MySQL Cluster
-# =========================
-frontend mysql_front
-    bind 10.7.0.100:3306
-    default_backend mysql_cluster
-
-backend mysql_cluster
-    mode tcp
-    option tcp-check
-    balance first
-    server dc1-db 10.7.0.4:3306 check inter 2s fall 3 rise 2
-    server dc2-db 10.7.0.5:3306 check inter 2s fall 3 rise 2 backup
-
-# =========================
-# Zabbix Server (port 10051)
-# =========================
-frontend zabbix_server_front
-    bind 10.7.0.100:10051
-    default_backend zabbix_servers
-
-backend zabbix_servers
-    mode tcp
-    option tcp-check
-    balance first
-    server dc1-zbx 10.7.0.4:10051 check inter 2s fall 3 rise 2
-    server dc2-zbx 10.7.0.5:10051 check inter 2s fall 3 rise 2 backup
-
-# =========================
-# Zabbix Frontend (Web UI)
-# =========================
-frontend zabbix_web_front
-    bind 10.7.0.100:8080
-    default_backend zabbix_webs
-
-backend zabbix_webs
-    mode tcp
-    option tcp-check
-    balance first
-    server dc1-web 10.7.0.4:8080 check inter 2s fall 3 rise 2
-    server dc2-web 10.7.0.5:8080 check inter 2s fall 3 rise 2 backup
-
-====================== ./hub/switch-db-route.sh ======================
-#!/usr/bin/env bash
-set -euo pipefail
-
-# === KONFIGURASI ===
-PEER_DB1='CjSFysbRyWptPxd4HdcRpsjbA8wvtnsMAKUXu92v/Wo='
-PEER_DB2='Z9J4PiuLH6cwTtmTgGqP9EuP7Wq4IOdHYtdOef75oVE='
-WG_IF='wg0'
-SUBNET='10.7.0.10/32'
-WG_NET='10.7.0.0/24'
-LOG='/var/log/switch-db-route.log'
-
-log(){ echo "[$(date +'%F %T')] $*" | tee -a "$LOG"; }
-
-require(){
-  command -v "$1" >/dev/null 2>&1 || { echo "Missing $1"; exit 1; }
-}
-
-require wg
-require ip
-
-TARGET="${1:-}"
-if [[ "$TARGET" != "db1" && "$TARGET" != "db2" ]]; then
-  echo "Usage: $0 {db1|db2}"
-  exit 2
-fi
-
-log "Switching $SUBNET via $TARGET"
-
-# Pastikan rute besar diarahkan ke wg0, biar failover nggak perlu ubah route
-ip route replace "$SUBNET" dev "$WG_IF" || true
-
-if [[ "$TARGET" == "db1" ]]; then
-  wg set "$WG_IF" peer "$PEER_DB1" allowed-ips 10.7.0.4/32,"$SUBNET"
-  wg set "$WG_IF" peer "$PEER_DB2" allowed-ips 10.7.0.5/32
-else
-  wg set "$WG_IF" peer "$PEER_DB1" allowed-ips 10.7.0.4/32
-  wg set "$WG_IF" peer "$PEER_DB2" allowed-ips 10.7.0.5/32,"$SUBNET"
-fi
-
-# Verifikasi
-sleep 1
-WG_SHOW="$(wg show)"
-echo "$WG_SHOW" | grep -q "$SUBNET" || { log "ERROR: $SUBNET belum terpasang di AllowedIPs mana pun"; exit 3; }
-
-# Pastikan kernel routing benar
-ip route get "$(echo "$SUBNET" | cut -d/ -f1)" >/dev/null 2>&1 || {
-  log "WARNING: ip route get gagal — cek tabel route"
-}
-
-log "OK: $SUBNET via $TARGET"
-exit 0
-
 ====================== ./list_files.sh ======================
 #!/bin/bash
 
@@ -645,236 +622,103 @@ RUN microdnf install -y iputils net-tools iproute dnsutils curl vim traceroute t
 CMD ["mysqld"]
 
 
-====================== ./mysql/bootstrap_gr.sh ======================
-#!/usr/bin/env bash
-set -euo pipefail
-
-# =====================================
-# Script bootstrap Group Replication
-# DC1 = mysql1 (10.7.0.4)
-# DC2 = mysql2 (10.7.0.5)
-# =====================================
-
-ROOT_PASS="abcdef"
-REPL_USER="repl"
-REPL_PASS="AndesRepl!"
-SQL_FILE="$(dirname "$0")/bootstrap_gr.sql"
-
-log() { echo "[$(date '+%F %T')] $*"; }
-
-# Pastikan parameter
-if [[ $# -eq 0 ]]; then
-  echo "❌ Harus ada parameter: dc1 atau dc2"
-  echo "   Contoh:"
-  echo "     ./bootstrap_gr.sh dc1"
-  echo "     ./bootstrap_gr.sh dc2"
-  exit 1
-fi
-
-NODE="$1"
-
-# Pastikan file SQL ada
-if [[ ! -f "$SQL_FILE" ]]; then
-  echo "❌ File $SQL_FILE tidak ditemukan"
-  exit 1
-fi
-
-case "$NODE" in
-  dc1)
-    log "Apply SQL ke mysql1 (DC1)..."
-    docker exec -i mysql1 mysql -uroot -p"$ROOT_PASS" < "$SQL_FILE"
-
-    log "Bootstrap cluster di mysql1 (DC1)..."
-    docker exec -i mysql1 mysql -uroot -p"$ROOT_PASS" <<EOF
-SET GLOBAL group_replication_bootstrap_group=ON;
-START GROUP_REPLICATION USER='$REPL_USER', PASSWORD='$REPL_PASS';
-SET GLOBAL group_replication_bootstrap_group=OFF;
-EOF
-    ;;
-
-  dc2)
-    log "Apply SQL ke mysql2 (DC2)..."
-    docker exec -i mysql2 mysql -uroot -p"$ROOT_PASS" < "$SQL_FILE"
-
-    log "Join cluster di mysql2 (DC2)..."
-    docker exec -i mysql2 mysql -uroot -p"$ROOT_PASS" <<EOF
-START GROUP_REPLICATION USER='$REPL_USER', PASSWORD='$REPL_PASS';
-EOF
-    ;;
-
-  *)
-    echo "❌ Parameter tidak valid: $NODE"
-    echo "Gunakan: dc1 atau dc2"
-    exit 1
-    ;;
-esac
-
-# =====================================
-# Cek status cluster (dari DC1 saja)
-# =====================================
-if [[ "$NODE" == "dc1" ]]; then
-  log "Cek status cluster dari DC1..."
-  docker exec -i mysql1 mysql -uroot -p"$ROOT_PASS" -e "
-  SELECT MEMBER_HOST, MEMBER_ROLE, MEMBER_STATE
-  FROM performance_schema.replication_group_members;
-  "
-fi
-
-log "✅ Bootstrap selesai untuk $NODE"
-
-
-====================== ./mysql/bootstrap_gr.sql ======================
--- =====================================================
--- Bootstrap MySQL Group Replication untuk DC1 & DC2
--- DC1 = 10.7.0.4, DC2 = 10.7.0.5
--- =====================================================
-
--- 1. Install plugin Group Replication
-INSTALL PLUGIN group_replication SONAME 'group_replication.so';
-
--- 2. Buat user repl
-DROP USER IF EXISTS 'repl'@'%';
-CREATE USER 'repl'@'%' IDENTIFIED BY 'AndesRepl!';
-GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%';
-FLUSH PRIVILEGES;
-
--- 3. Pastikan fungsi boleh direplikasi
-SET GLOBAL log_bin_trust_function_creators = 1;
-
--- Catatan:
--- Jalankan SET GLOBAL group_replication_bootstrap_group=ON hanya di DC1
--- Setelah start, segera OFF-kan lagi.
-
-
 ====================== ./mysql/init.sql ======================
+-- ======================================================
+-- INIT DB untuk Zabbix + User Replikasi
+-- ======================================================
+
+-- Hapus database lama kalau ada
 DROP DATABASE IF EXISTS zabbix;
 CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
+-- Buat user zabbix
 DROP USER IF EXISTS 'zabbix'@'%';
 CREATE USER 'zabbix'@'%' IDENTIFIED BY 'AndesZabbix!';
+
+-- Beri hak penuh ke database zabbix
 GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'%';
 
+-- Izinkan fungsi user didefinisikan (dibutuhkan Zabbix)
 SET GLOBAL log_bin_trust_function_creators = 1;
+
+
+-- ======================================================
+-- User untuk replikasi (rep1)
+-- ======================================================
+DROP USER IF EXISTS 'rep1'@'%';
+CREATE USER 'rep1'@'%' IDENTIFIED BY 'abcdef';
+
+GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'rep1'@'%';
+
+FLUSH PRIVILEGES;
+
 
 ====================== ./mysql/my.cnf.dc1 ======================
 [mysqld]
+# Identity
 server_id=1
 bind-address=0.0.0.0
 
-# Binary log & GTID (wajib untuk Group Replication)
+# Binary log wajib untuk replikasi
 log_bin=binlog
 binlog_format=ROW
+sync_binlog=1
+
+# GTID (opsional tapi disarankan untuk failover otomatis/manual)
 gtid_mode=ON
 enforce_gtid_consistency=ON
-binlog_checksum=NONE
+
+# Replikasi
+relay_log=relay-bin
+relay_log_index=relay-bin.index
 master_info_repository=TABLE
 relay_log_info_repository=TABLE
-transaction_write_set_extraction=XXHASH64
 
-# Load plugin Group Replication
-plugin-load-add=group_replication.so
+# Optimasi & keamanan
+skip_name_resolve=ON
+binlog_checksum=NONE
 
-# ====== Group Replication (pakai IP WireGuard host) ======
-loose-group_replication_group_name="b9a2b7a2-5f4c-4f8c-9b2e-1c1d9f00a001"
-loose-group_replication_start_on_boot=OFF
-loose-group_replication_bootstrap_group=OFF
-
-# XCom listen di IP WG host DC1
-loose-group_replication_local_address="10.7.0.4:33061"
-
-# Seeds = daftar IP WG host antar node (hapus .6 yang tidak ada)
-loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
-
-# Mode single-primary (umum untuk app seperti Zabbix)
-loose-group_replication_single_primary_mode=ON
-loose-group_replication_enforce_update_everywhere_checks=OFF
-
-# Allowlist antar node (cukup dua IP ini)
-loose-group_replication_ip_allowlist="10.7.0.4,10.7.0.5"
-
-# Reporting (membantu beberapa tool)
+# Laporan host ke replica
 report_host=10.7.0.4
 report_port=3306
+
+# Default karakter set
+character-set-server=utf8mb4
+collation-server=utf8mb4_general_ci
 
 
 ====================== ./mysql/my.cnf.dc2 ======================
 [mysqld]
+# Identity
 server_id=2
 bind-address=0.0.0.0
 
+# Binary log tetap diaktifkan agar bisa promote DC2 jadi master jika DC1 down
 log_bin=binlog
 binlog_format=ROW
+sync_binlog=1
+
+# GTID (sama dengan DC1)
 gtid_mode=ON
 enforce_gtid_consistency=ON
-binlog_checksum=NONE
+
+# Relay log (wajib untuk replica)
+relay_log=relay-bin
+relay_log_index=relay-bin.index
 master_info_repository=TABLE
 relay_log_info_repository=TABLE
-transaction_write_set_extraction=XXHASH64
 
-plugin-load-add=group_replication.so
+# Optimasi & keamanan
+skip_name_resolve=ON
+binlog_checksum=NONE
 
-loose-group_replication_group_name="b9a2b7a2-5f4c-4f8c-9b2e-1c1d9f00a001"
-loose-group_replication_start_on_boot=OFF
-loose-group_replication_bootstrap_group=OFF
-
-# XCom listen di IP WG host DC2
-loose-group_replication_local_address="10.7.0.5:33061"
-
-# Seeds (hapus .6)
-loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
-
-loose-group_replication_single_primary_mode=ON
-loose-group_replication_enforce_update_everywhere_checks=OFF
-
-loose-group_replication_ip_allowlist="10.7.0.4,10.7.0.5"
-
+# Laporan host ke source
 report_host=10.7.0.5
 report_port=3306
 
-
-====================== ./mysql/reset_gr.sh ======================
-#!/usr/bin/env bash
-set -euo pipefail
-
-ROOT_PASS="abcdef"
-
-log() { echo "[$(date '+%F %T')] $*"; }
-
-# Pastikan parameter
-if [[ $# -eq 0 ]]; then
-  echo "❌ Harus ada parameter: dc1 atau dc2"
-  echo "   Contoh: ./reset_gr.sh dc1"
-  echo "           ./reset_gr.sh dc2"
-  exit 1
-fi
-
-NODE="$1"
-CONTAINER=""
-
-case "$NODE" in
-  dc1) CONTAINER="mysql1" ;;
-  dc2) CONTAINER="mysql2" ;;
-  *)
-    echo "❌ Parameter tidak valid: $NODE"
-    echo "Gunakan: dc1 atau dc2"
-    exit 2
-    ;;
-esac
-
-log "👉 Reset $NODE ($CONTAINER)..."
-
-docker exec -i "$CONTAINER" mysql -uroot -p"$ROOT_PASS" <<EOF || true
-STOP GROUP_REPLICATION;
-UNINSTALL PLUGIN group_replication;
-DROP USER IF EXISTS 'repl'@'%';
-EOF
-
-docker exec -i "$CONTAINER" rm -f /var/lib/mysql/auto.cnf || true
-
-docker restart "$CONTAINER"
-
-log "✅ $NODE ($CONTAINER) selesai direset"
-log "ℹ️ Jalankan bootstrap_gr.sh $NODE untuk inisialisasi ulang"
+# Default karakter set
+character-set-server=utf8mb4
+collation-server=utf8mb4_general_ci
 
 
 ====================== ./rebuild.sh ======================

@@ -1,5 +1,9 @@
+version: "3.9"
+
 services:
-  # === MySQL DC1 (bind ke host 10.7.0.4) ===
+  # =========================
+  # MySQL DC1 (10.7.0.4)
+  # =========================
   mysql1:
     build:
       context: ../mysql
@@ -13,14 +17,18 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    network_mode: "host"   # langsung pakai IP host (WireGuard 10.7.0.4)
+    # HANYA expose 3306 (tidak pakai host network)
+    ports:
+      - "3306:3306"
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s
       timeout: 3s
       retries: 20
 
-  # === Zabbix Server DC1 ===
+  # =========================
+  # Zabbix Server DC1
+  # =========================
   zabbix-server:
     build:
       context: ../zabbix
@@ -28,12 +36,13 @@ services:
     container_name: zbx-server-dc1
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"   # VIP MySQL (via Keepalived atau HAProxy hub)
+      DB_SERVER_HOST: "10.7.0.10"     # VIP DB (ikut failover)
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
       HANodeName: "dc1"
       TZ: "Asia/Jakarta"
+    # publish ke host agar HAProxy (host net) bisa forward ke 127.0.0.1:10051
     ports:
       - "10051:10051"
     depends_on:
@@ -44,7 +53,9 @@ services:
       timeout: 3s
       retries: 30
 
-  # === Zabbix Web DC1 ===
+  # =========================
+  # Zabbix Web DC1
+  # =========================
   zabbix-web:
     build:
       context: ../zabbix
@@ -52,14 +63,14 @@ services:
     container_name: zbx-web-dc1
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"
+      DB_SERVER_HOST: "10.7.0.10"     # VIP DB
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
       ZBX_SERVER_HOST: "127.0.0.1"
       PHP_TZ: "Asia/Jakarta"
     ports:
-      - "8080:8080"
+      - "8080:8080"                   # HAProxy konsumsi di 127.0.0.1:8080
     depends_on:
       - zabbix-server
     healthcheck:
@@ -67,3 +78,20 @@ services:
       interval: 10s
       timeout: 3s
       retries: 30
+
+  # =========================
+  # HAProxy (bind ke VIP 10.7.0.10)
+  # =========================
+  haproxy:
+    build:
+      context: ./haproxy
+      dockerfile: Dockerfile
+    container_name: haproxy-dc1
+    restart: unless-stopped
+    network_mode: "host"              # WAJIB agar bisa bind ke VIP host
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - mysql1
+      - zabbix-server
+      - zabbix-web

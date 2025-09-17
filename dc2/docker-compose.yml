@@ -1,5 +1,9 @@
+version: "3.9"
+
 services:
-  # === MySQL DC2 (bind ke host 10.7.0.5) ===
+  # =========================
+  # MySQL DC2 (10.7.0.5)
+  # =========================
   mysql2:
     build:
       context: ../mysql
@@ -13,14 +17,17 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    network_mode: "host"   # langsung pakai IP host (WireGuard 10.7.0.5)
+    ports:
+      - "3306:3306"
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s
       timeout: 3s
       retries: 20
 
-  # === Zabbix Server DC2 ===
+  # =========================
+  # Zabbix Server DC2
+  # =========================
   zabbix-server:
     build:
       context: ../zabbix
@@ -28,7 +35,7 @@ services:
     container_name: zbx-server-dc2
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"
+      DB_SERVER_HOST: "10.7.0.10"     # VIP DB (ikut failover)
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
@@ -44,7 +51,9 @@ services:
       timeout: 3s
       retries: 30
 
-  # === Zabbix Web DC2 ===
+  # =========================
+  # Zabbix Web DC2
+  # =========================
   zabbix-web:
     build:
       context: ../zabbix
@@ -52,7 +61,7 @@ services:
     container_name: zbx-web-dc2
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"
+      DB_SERVER_HOST: "10.7.0.10"     # VIP DB
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
@@ -67,3 +76,20 @@ services:
       interval: 10s
       timeout: 3s
       retries: 30
+
+  # =========================
+  # HAProxy (bind ke VIP 10.7.0.10)
+  # =========================
+  haproxy:
+    build:
+      context: ./haproxy
+      dockerfile: Dockerfile
+    container_name: haproxy-dc2
+    restart: unless-stopped
+    network_mode: "host"              # wajib supaya bisa bind ke VIP
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - mysql2
+      - zabbix-server
+      - zabbix-web
