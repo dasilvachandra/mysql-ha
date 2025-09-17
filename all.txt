@@ -6,32 +6,32 @@ MIT License
 ====================== ./README.md ======================
 📦 mysql-ha
 
-Cluster **MySQL + Zabbix High Availability** lintas Data Center menggunakan **WireGuard VPN** dan **HAProxy VIP**.  
+Cluster **MySQL + Zabbix High Availability** lintas Data Center menggunakan **WireGuard VPN** dan **Keepalived VIP**.  
 Proyek ini menyediakan struktur direktori, konfigurasi, dan contoh deployment untuk membangun replikasi MySQL dengan failover otomatis dan integrasi Zabbix HA.
 
 ✨ Fitur
 
-🔒 WireGuard VPN sebagai tunnel antar-DC.  
-🗄️ MySQL Group Replication (single-primary) untuk sinkronisasi data.  
-⚖️ HAProxy di hub sebagai load balancer sekaligus Virtual IP (VIP).  
-📊 Zabbix server & frontend berjalan di DC1 dan DC2 dengan HA mode.  
-📂 Struktur direktori modular (dc1/, dc2/, mysql/, zabbix/, hub/, docs/).
+- 🔒 **WireGuard VPN** sebagai tunnel antar-DC.  
+- 🗄️ **MySQL Group Replication (single-primary)** untuk sinkronisasi data.  
+- ⚖️ **Keepalived** di DC1/DC2 sebagai pengelola Virtual IP (VIP).  
+- 📊 **Zabbix server & frontend** berjalan di DC1 dan DC2 dengan HA mode.  
+- 📂 Struktur direktori modular (dc1/, dc2/, mysql/, zabbix/, docs/).  
 
 📂 Struktur Direktori
-
 mysql-ha/
-├── dc1/          # Konfigurasi & compose untuk Data Center 1 (MySQL, Zabbix)
-├── dc2/          # Konfigurasi & compose untuk Data Center 2 (MySQL, Zabbix)
-├── hub/          # HAProxy VIP untuk MySQL & Zabbix
-├── mysql/        # Konfigurasi MySQL Group Replication
-├── zabbix/       # Dockerfile & compose Zabbix server + frontend
-├── docs/         # Dokumentasi & catatan implementasi
+├── dc1/ # Konfigurasi & compose untuk Data Center 1 (MySQL, Zabbix, Keepalived)
+├── dc2/ # Konfigurasi & compose untuk Data Center 2 (MySQL, Zabbix, Keepalived)
+├── mysql/ # Konfigurasi MySQL Group Replication & init SQL
+├── zabbix/ # Dockerfile & compose Zabbix server + frontend
+├── docs/ # Dokumentasi & catatan implementasi
+
 
 🚀 Tujuan
 
-- Memberikan kerangka kerja (scaffold) untuk eksperimen dan implementasi MySQL + Zabbix HA lintas DC.  
+- Memberikan kerangka kerja (scaffold) untuk eksperimen dan implementasi **MySQL + Zabbix HA** lintas DC.  
 - Memisahkan konfigurasi per DC agar mudah dimodifikasi sesuai kebutuhan.  
-- Mendukung deployment berbasis Docker Compose maupun integrasi ke sistem produksi.
+- Mendukung deployment berbasis Docker Compose maupun integrasi ke sistem produksi.  
+- Menjamin ketersediaan layanan monitoring meski salah satu DC down (failover otomatis via
 
 ====================== ./dc1/docker-compose.yml ======================
 version: "3.9"
@@ -449,29 +449,30 @@ esac
 ====================== ./docs/README.md ======================
 # mysql-ha
 
-Cluster **MySQL High Availability + Zabbix HA** lintas Data Center menggunakan **WireGuard VPN** dan **HAProxy VIP**.
+Cluster **MySQL High Availability + Zabbix HA** lintas Data Center menggunakan **WireGuard VPN** dan **Keepalived VIP**.
 
 ## Struktur Direktori
 - `dc1/`, `dc2/` → konfigurasi per Data Center (docker-compose untuk MySQL & Zabbix).  
-- `hub/` → HAProxy di hub, menyediakan Virtual IP (VIP) untuk failover.  
 - `mysql/` → konfigurasi MySQL Group Replication.  
 - `zabbix/` → konfigurasi Zabbix server & frontend.  
-- `docs/` → catatan & dokumentasi bootstrap.
+- `docs/` → catatan & dokumentasi bootstrap.  
 
 ## Mekanisme HA
 - **Database** direplikasi menggunakan **MySQL Group Replication** (single-primary mode) antara DC1 & DC2.  
-- **HAProxy di hub** menyediakan Virtual IP (**10.7.0.100**) untuk semua layanan:  
-  - `10.7.0.100:3306` → MySQL cluster  
-  - `10.7.0.100:10051` → Zabbix server  
-  - `10.7.0.100:8080` → Zabbix frontend (Web UI)  
-- **Zabbix Server** berjalan di DC1 & DC2 dengan HA mode (HANodeName berbeda, hanya 1 node aktif).  
-- **Zabbix Frontend** tersedia di kedua DC, diakses melalui VIP hub.
+- **Keepalived** mengelola Virtual IP (**10.7.0.10**) untuk semua layanan:  
+  - `10.7.0.10:3306` → MySQL cluster  
+  - `10.7.0.10:10051` → Zabbix server  
+  - `10.7.0.10:8080` → Zabbix frontend (Web UI)  
+- **Failover**: Jika DC1 down, DC2 akan otomatis mengambil alih VIP, begitu juga sebaliknya.  
+- **Zabbix Server** berjalan di DC1 & DC2 dengan HA mode (`HANodeName` berbeda, hanya 1 node aktif).  
+- **Zabbix Frontend** tersedia di kedua DC, diakses melalui **VIP yang sama**.  
 
 ## Catatan
-- WireGuard harus sudah dikonfigurasi di host (bukan container).  
-- Semua container berada dalam network `zabbix_net` (10.11.12.0/24).  
-- IP host digunakan untuk komunikasi **Group Replication** antar-DC (10.7.0.4, 10.7.0.5).  
-- Tidak ada Keepalived, failover murni di-handle oleh **HAProxy di hub**.
+- **WireGuard** harus sudah dikonfigurasi di host (bukan container).  
+- Semua container MySQL & Zabbix tetap berjalan di kedua DC.  
+- VIP `10.7.0.10` berpindah otomatis antar DC melalui **Keepalived**.  
+- Monitoring client (misalnya NMS atau pengguna web) cukup mengakses VIP saja, tanpa perlu tahu node mana yang sedang aktif.  
+
 
 ====================== ./git-pull.sh ======================
 #!/bin/bash
