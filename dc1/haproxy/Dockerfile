@@ -2,16 +2,16 @@ FROM haproxy:2.8
 
 LABEL maintainer="Andes Solutions"
 
-# Install tools troubleshooting (Alpine base image → pakai apk)
-RUN apk add --no-cache \
+# Install tools troubleshooting (Debian base image → pakai apt-get)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
-    iputils \
-    bind-tools \
+    iputils-ping \
+    dnsutils \
     curl \
     vim \
     tcpdump \
     net-tools \
-    iproute2
+    iproute2 && \
+    rm -rf /var/lib/apt/lists/*
 
-# Default command jalankan haproxy dengan config
 CMD ["haproxy", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
