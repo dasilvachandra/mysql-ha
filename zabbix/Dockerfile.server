@@ -2,8 +2,9 @@ FROM zabbix/zabbix-server-mysql:alpine-6.4-latest
 
 LABEL maintainer="Andes Solutions"
 
-# Tambahkan tools troubleshooting
+USER root
 RUN apk add --no-cache bash curl vim iputils bind-tools net-tools iproute2 tcpdump
+USER zabbix
 
 EXPOSE 10051
 CMD ["docker-entrypoint.sh"]
