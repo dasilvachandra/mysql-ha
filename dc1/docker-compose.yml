@@ -1,5 +1,5 @@
 services:
-  # === MySQL DC1 ===
+  # === MySQL DC1 (bind ke IP host: 10.7.0.4) ===
   mysql1:
     build:
       context: ../mysql
@@ -7,20 +7,20 @@ services:
     container_name: mysql1
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
+      MYSQL_ROOT_PASSWORD: "abcdef"
       TZ: "Asia/Jakarta"
     volumes:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    ports:
-      - "3306:3306"
-      - "33061:33061"   # XCom GR di IP WireGuard host (via host NAT)
+    # Penting: supaya mysqld bisa bind ke 10.7.0.4:33061 (XCom)
+    network_mode: "host"
+    # Jangan pakai "ports:" di host-mode
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s
       timeout: 3s
-      retries: 10
+      retries: 20
 
   # === Zabbix Server DC1 ===
   zabbix-server:
@@ -30,7 +30,8 @@ services:
     container_name: zbx-server-dc1
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"     # VIP via Keepalived (atau ganti 10.7.0.100 jika mau lewat HAProxy Hub)
+      # Arahkan ke VIP DB (Keepalived 10.7.0.10). Jika pakai HAProxy hub, ganti ke 10.7.0.100
+      DB_SERVER_HOST: "10.7.0.10"
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
@@ -44,7 +45,7 @@ services:
       test: ["CMD-SHELL", "timeout 3 bash -lc '</dev/tcp/127.0.0.1/10051' || exit 1"]
       interval: 10s
       timeout: 3s
-      retries: 20
+      retries: 30
 
   # === Zabbix Web DC1 ===
   zabbix-web:
@@ -54,7 +55,7 @@ services:
     container_name: zbx-web-dc1
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"     # VIP DB yang sama
+      DB_SERVER_HOST: "10.7.0.10"
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
@@ -68,4 +69,4 @@ services:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ || exit 1"]
       interval: 10s
       timeout: 3s
-      retries: 20
+      retries: 30

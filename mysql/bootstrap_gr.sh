@@ -7,7 +7,7 @@ set -euo pipefail
 # DC2 = mysql2 (10.7.0.5)
 # =====================================
 
-ROOT_PASS="AndesMysql123!"
+ROOT_PASS="abcdef"
 REPL_USER="repl"
 REPL_PASS="AndesRepl!"
 SQL_FILE="$(dirname "$0")/bootstrap_gr.sql"

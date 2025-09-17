@@ -1,12 +1,69 @@
-version: '3.8'
-
 services:
-  haproxy:
+  # === MySQL DC2 (bind ke IP host: 10.7.0.5) ===
+  mysql2:
     build:
-      context: .
+      context: ../mysql
       dockerfile: Dockerfile
-    container_name: haproxy-hub
+    container_name: mysql2
     restart: unless-stopped
-    network_mode: "host"
+    environment:
+      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
+      TZ: "Asia/Jakarta"
     volumes:
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - /opt/mysql:/var/lib/mysql
+      - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf:ro
+      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    network_mode: "host"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  # === Zabbix Server DC2 ===
+  zabbix-server:
+    build:
+      context: ../zabbix
+      dockerfile: Dockerfile.server
+    container_name: zbx-server-dc2
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      HANodeName: "dc2"
+      TZ: "Asia/Jakarta"
+    ports:
+      - "10051:10051"
+    depends_on:
+      - mysql2
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -lc '</dev/tcp/127.0.0.1/10051' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  # === Zabbix Web DC2 ===
+  zabbix-web:
+    build:
+      context: ../zabbix
+      dockerfile: Dockerfile.web
+    container_name: zbx-web-dc2
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      ZBX_SERVER_HOST: "127.0.0.1"
+      PHP_TZ: "Asia/Jakarta"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - zabbix-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30

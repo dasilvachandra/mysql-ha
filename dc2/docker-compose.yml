@@ -7,7 +7,7 @@ services:
     container_name: mysql2
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
+      MYSQL_ROOT_PASSWORD: "abcdef"
       TZ: "Asia/Jakarta"
     volumes:
       - /opt/mysql:/var/lib/mysql
