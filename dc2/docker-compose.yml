@@ -16,6 +16,7 @@ services:
     volumes:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf:ro
+      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "3306:3306"
     healthcheck:
