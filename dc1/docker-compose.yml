@@ -1,5 +1,5 @@
 services:
-  # === MySQL DC1 (bind ke IP host: 10.7.0.4) ===
+  # === MySQL DC1 (bind ke host 10.7.0.4) ===
   mysql1:
     build:
       context: ../mysql
@@ -13,9 +13,7 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    # Penting: supaya mysqld bisa bind ke 10.7.0.4:33061 (XCom)
-    network_mode: "host"
-    # Jangan pakai "ports:" di host-mode
+    network_mode: "host"   # langsung pakai IP host (WireGuard 10.7.0.4)
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 10s
@@ -30,8 +28,7 @@ services:
     container_name: zbx-server-dc1
     restart: unless-stopped
     environment:
-      # Arahkan ke VIP DB (Keepalived 10.7.0.10). Jika pakai HAProxy hub, ganti ke 10.7.0.100
-      DB_SERVER_HOST: "10.7.0.10"
+      DB_SERVER_HOST: "10.7.0.10"   # VIP MySQL (via Keepalived atau HAProxy hub)
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"

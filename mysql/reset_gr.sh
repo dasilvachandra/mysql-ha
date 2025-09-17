@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_PASS="AndesMysql123!"
+ROOT_PASS="abcdef"
 
 log() { echo "[$(date '+%F %T')] $*"; }
 

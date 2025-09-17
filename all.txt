@@ -34,10 +34,8 @@ mysql-ha/
 - Mendukung deployment berbasis Docker Compose maupun integrasi ke sistem produksi.
 
 ====================== ./dc1/docker-compose.yml ======================
-version: '3.8'
-
 services:
-  # === MySQL DC1 ===
+  # === MySQL DC1 (bind ke IP host: 10.7.0.4) ===
   mysql1:
     build:
       context: ../mysql
@@ -45,14 +43,20 @@ services:
     container_name: mysql1
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
+      MYSQL_ROOT_PASSWORD: "abcdef"
+      TZ: "Asia/Jakarta"
     volumes:
       - /opt/mysql:/var/lib/mysql
-      - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf
-      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "3306:3306"
-      - "33061:33061"   # 👈 tambahkan ini
+      - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf:ro
+      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # Penting: supaya mysqld bisa bind ke 10.7.0.4:33061 (XCom)
+    network_mode: "host"
+    # Jangan pakai "ports:" di host-mode
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
 
   # === Zabbix Server DC1 ===
   zabbix-server:
@@ -62,15 +66,22 @@ services:
     container_name: zbx-server-dc1
     restart: unless-stopped
     environment:
+      # Arahkan ke VIP DB (Keepalived 10.7.0.10). Jika pakai HAProxy hub, ganti ke 10.7.0.100
       DB_SERVER_HOST: "10.7.0.10"
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
       HANodeName: "dc1"
+      TZ: "Asia/Jakarta"
     ports:
       - "10051:10051"
     depends_on:
       - mysql1
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -lc '</dev/tcp/127.0.0.1/10051' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
 
   # === Zabbix Web DC1 ===
   zabbix-web:
@@ -90,6 +101,11 @@ services:
       - "8080:8080"
     depends_on:
       - zabbix-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
 
 
 ====================== ./dc1/keepalived/keepalived.conf ======================
@@ -171,8 +187,6 @@ EXPOSE 10051
 CMD ["docker-entrypoint.sh"]
 
 ====================== ./dc2/docker-compose.yml ======================
-version: '3.8'
-
 services:
   # === MySQL DC2 ===
   mysql2:
@@ -182,14 +196,20 @@ services:
     container_name: mysql2
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
+      MYSQL_ROOT_PASSWORD: "abcdef"
+      TZ: "Asia/Jakarta"
     volumes:
       - /opt/mysql:/var/lib/mysql
-      - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf
-      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf:ro
+      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "3306:3306"
-      - "33061:33061"   # 👈 tambahkan ini
+      - "33061:33061"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 
   # === Zabbix Server DC2 ===
   zabbix-server:
@@ -199,15 +219,21 @@ services:
     container_name: zbx-server-dc2
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"
+      DB_SERVER_HOST: "10.7.0.10"     # sama VIP DB
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
       HANodeName: "dc2"
+      TZ: "Asia/Jakarta"
     ports:
       - "10051:10051"
     depends_on:
       - mysql2
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -lc '</dev/tcp/127.0.0.1/10051' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
 
   # === Zabbix Web DC2 ===
   zabbix-web:
@@ -227,6 +253,11 @@ services:
       - "8080:8080"
     depends_on:
       - zabbix-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
 
 
 ====================== ./dc2/keepalived/keepalived.conf ======================
@@ -367,18 +398,75 @@ CMD ["haproxy", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
 
 
 ====================== ./hub/docker-compose.yml ======================
-version: '3.8'
-
 services:
-  haproxy:
+  # === MySQL DC2 (bind ke IP host: 10.7.0.5) ===
+  mysql2:
     build:
-      context: .
+      context: ../mysql
       dockerfile: Dockerfile
-    container_name: haproxy-hub
+    container_name: mysql2
     restart: unless-stopped
-    network_mode: "host"
+    environment:
+      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
+      TZ: "Asia/Jakarta"
     volumes:
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - /opt/mysql:/var/lib/mysql
+      - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf:ro
+      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    network_mode: "host"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  # === Zabbix Server DC2 ===
+  zabbix-server:
+    build:
+      context: ../zabbix
+      dockerfile: Dockerfile.server
+    container_name: zbx-server-dc2
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      HANodeName: "dc2"
+      TZ: "Asia/Jakarta"
+    ports:
+      - "10051:10051"
+    depends_on:
+      - mysql2
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -lc '</dev/tcp/127.0.0.1/10051' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  # === Zabbix Web DC2 ===
+  zabbix-web:
+    build:
+      context: ../zabbix
+      dockerfile: Dockerfile.web
+    container_name: zbx-web-dc2
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      ZBX_SERVER_HOST: "127.0.0.1"
+      PHP_TZ: "Asia/Jakarta"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - zabbix-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
 
 
 ====================== ./hub/haproxy.cfg ======================
@@ -567,7 +655,7 @@ set -euo pipefail
 # DC2 = mysql2 (10.7.0.5)
 # =====================================
 
-ROOT_PASS="AndesMysql123!"
+ROOT_PASS="abcdef"
 REPL_USER="repl"
 REPL_PASS="AndesRepl!"
 SQL_FILE="$(dirname "$0")/bootstrap_gr.sql"
@@ -686,19 +774,27 @@ transaction_write_set_extraction=XXHASH64
 # Load plugin Group Replication
 plugin-load-add=group_replication.so
 
-# Group Replication Config
+# ====== Group Replication (pakai IP WireGuard host) ======
 loose-group_replication_group_name="b9a2b7a2-5f4c-4f8c-9b2e-1c1d9f00a001"
 loose-group_replication_start_on_boot=OFF
 loose-group_replication_bootstrap_group=OFF
+
+# XCom listen di IP WG host DC1
 loose-group_replication_local_address="10.7.0.4:33061"
+
+# Seeds = daftar IP WG host antar node (hapus .6 yang tidak ada)
 loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
 
-# Mode single-primary
+# Mode single-primary (umum untuk app seperti Zabbix)
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF
 
-# Allowlist antar node
-loose-group_replication_ip_allowlist="10.7.0.4,10.7.0.5,10.7.0.6"
+# Allowlist antar node (cukup dua IP ini)
+loose-group_replication_ip_allowlist="10.7.0.4,10.7.0.5"
+
+# Reporting (membantu beberapa tool)
+report_host=10.7.0.4
+report_port=3306
 
 
 ====================== ./mysql/my.cnf.dc2 ======================
@@ -720,20 +816,27 @@ plugin-load-add=group_replication.so
 loose-group_replication_group_name="b9a2b7a2-5f4c-4f8c-9b2e-1c1d9f00a001"
 loose-group_replication_start_on_boot=OFF
 loose-group_replication_bootstrap_group=OFF
+
+# XCom listen di IP WG host DC2
 loose-group_replication_local_address="10.7.0.5:33061"
-loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061,10.7.0.6:33061"
+
+# Seeds (hapus .6)
+loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
 
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF
 
-loose-group_replication_ip_allowlist="10.7.0.4,10.7.0.5,10.7.0.6"
+loose-group_replication_ip_allowlist="10.7.0.4,10.7.0.5"
+
+report_host=10.7.0.5
+report_port=3306
 
 
 ====================== ./mysql/reset_gr.sh ======================
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_PASS="AndesMysql123!"
+ROOT_PASS="abcdef"
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
