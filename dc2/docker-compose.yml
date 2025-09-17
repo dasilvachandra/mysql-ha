@@ -76,20 +76,3 @@ services:
       interval: 10s
       timeout: 3s
       retries: 30
-
-  # =========================
-  # HAProxy (bind ke VIP 10.7.0.10)
-  # =========================
-  haproxy:
-    build:
-      context: ./haproxy
-      dockerfile: Dockerfile
-    container_name: haproxy-dc2
-    restart: unless-stopped
-    network_mode: "host"              # wajib supaya bisa bind ke VIP
-    volumes:
-      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-    depends_on:
-      - mysql2
-      - zabbix-server
-      - zabbix-web

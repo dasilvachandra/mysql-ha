@@ -115,82 +115,6 @@ services:
       timeout: 3s
       retries: 30
 
-  # =========================
-  # HAProxy (bind ke VIP 10.7.0.10)
-  # =========================
-  haproxy:
-    build:
-      context: ./haproxy
-      dockerfile: Dockerfile
-    container_name: haproxy-dc1
-    restart: unless-stopped
-    network_mode: "host"              # WAJIB agar bisa bind ke VIP host
-    volumes:
-      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-    depends_on:
-      - mysql1
-      - zabbix-server
-      - zabbix-web
-
-
-====================== ./dc1/haproxy/Dockerfile ======================
-FROM haproxy:2.8
-RUN apt-get update && apt-get install -y iputils-ping dnsutils curl vim && rm -rf /var/lib/apt/lists/*
-CMD ["haproxy","-f","/usr/local/etc/haproxy/haproxy.cfg"]
-
-
-====================== ./dc1/haproxy/haproxy.cfg ======================
-global
-    log /dev/log local0
-    maxconn 4096
-
-defaults
-    log global
-    mode tcp
-    option tcplog
-    timeout connect 5s
-    timeout client  60s
-    timeout server  60s
-    retries 3
-
-# =========================
-# MySQL via VIP (user/app connect ke 10.7.0.10:3306)
-# =========================
-frontend mysql_front
-    bind 10.7.0.10:3306
-    default_backend mysql_local
-
-backend mysql_local
-    mode tcp
-    option tcp-check
-    # Teruskan ke mysqld lokal node ini
-    server localmysql 127.0.0.1:3306 check inter 2s fall 3 rise 2
-
-# =========================
-# Zabbix Server (10051) via VIP
-# =========================
-frontend zabbix_server_front
-    bind 10.7.0.10:10051
-    default_backend zabbix_server_local
-
-backend zabbix_server_local
-    mode tcp
-    option tcp-check
-    server localzbx 127.0.0.1:10051 check inter 2s fall 3 rise 2
-
-# =========================
-# Zabbix Web (8080) via VIP
-# =========================
-frontend zabbix_web_front
-    bind 10.7.0.10:8080
-    default_backend zabbix_web_local
-
-backend zabbix_web_local
-    mode tcp
-    option tcp-check
-    server localweb 127.0.0.1:8080 check inter 2s fall 3 rise 2
-
-
 ====================== ./dc1/keepalived/keepalived.conf ======================
 global_defs {
   script_user root
@@ -381,24 +305,6 @@ services:
       timeout: 3s
       retries: 30
 
-  # =========================
-  # HAProxy (bind ke VIP 10.7.0.10)
-  # =========================
-  haproxy:
-    build:
-      context: ./haproxy
-      dockerfile: Dockerfile
-    container_name: haproxy-dc2
-    restart: unless-stopped
-    network_mode: "host"              # wajib supaya bisa bind ke VIP
-    volumes:
-      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-    depends_on:
-      - mysql2
-      - zabbix-server
-      - zabbix-web
-
-
 ====================== ./dc2/keepalived/keepalived.conf ======================
 global_defs {
   script_user root
@@ -446,9 +352,55 @@ vrrp_instance VI_DB {
 
 
 ====================== ./dc2/keepalived/keepalived.service.d/override.conf ======================
-[Unit]
-After=network-online.target wg-quick@wg0.service
-Wants=network-online.target wg-quick@wg0.service
+global
+    log /dev/log local0
+    maxconn 4096
+
+defaults
+    log global
+    mode tcp
+    option tcplog
+    timeout connect 5s
+    timeout client  60s
+    timeout server  60s
+    retries 3
+
+# =========================
+# MySQL via VIP (user/app connect ke 10.7.0.10:3306)
+# =========================
+frontend mysql_front
+    bind 10.7.0.10:3306
+    default_backend mysql_local
+
+backend mysql_local
+    mode tcp
+    option tcp-check
+    server localmysql 127.0.0.1:3306 check inter 2s fall 3 rise 2
+
+# =========================
+# Zabbix Server (10051) via VIP
+# =========================
+frontend zabbix_server_front
+    bind 10.7.0.10:10051
+    default_backend zabbix_server_local
+
+backend zabbix_server_local
+    mode tcp
+    option tcp-check
+    server localzbx 127.0.0.1:10051 check inter 2s fall 3 rise 2
+
+# =========================
+# Zabbix Web (8080) via VIP
+# =========================
+frontend zabbix_web_front
+    bind 10.7.0.10:8080
+    default_backend zabbix_web_local
+
+backend zabbix_web_local
+    mode tcp
+    option tcp-check
+    server localweb 127.0.0.1:8080 check inter 2s fall 3 rise 2
+
 
 ====================== ./dc2/keepalived/scripts/is_primary.sh ======================
 #!/usr/bin/env bash
@@ -620,6 +572,32 @@ RUN microdnf install -y iputils net-tools iproute dnsutils curl vim traceroute t
     microdnf clean all
 
 CMD ["mysqld"]
+
+
+====================== ./mysql/init-replica.sql ======================
+-- ======================================================
+-- Init script untuk konfigurasi DC2 sebagai replica DC1
+-- ======================================================
+
+-- Pastikan tidak ada replikasi lama
+STOP REPLICA;
+RESET REPLICA ALL;
+
+-- Atur source replication (DC1 → DC2)
+CHANGE REPLICATION SOURCE TO
+  SOURCE_HOST = '10.7.0.4',
+  SOURCE_PORT = 3306,
+  SOURCE_USER = 'rep1',
+  SOURCE_PASSWORD = 'abcdef',
+  SOURCE_LOG_FILE = 'binlog.000005',   -- hasil SHOW MASTER STATUS di DC1
+  SOURCE_LOG_POS  = 1433,              -- hasil SHOW MASTER STATUS di DC1
+  SOURCE_SSL = 1;
+
+-- Mulai proses replikasi
+START REPLICA;
+
+-- Verifikasi status
+SHOW REPLICA STATUS\G
 
 
 ====================== ./mysql/init.sql ======================
