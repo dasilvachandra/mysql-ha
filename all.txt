@@ -34,6 +34,9 @@ mysql-ha/
 - Mendukung deployment berbasis Docker Compose maupun integrasi ke sistem produksi.
 
 ====================== ./dc1/docker-compose.yml ======================
+version: '3.8'
+
+services:
   # === MySQL DC1 ===
   mysql1:
     build:
@@ -50,6 +53,43 @@ mysql-ha/
     ports:
       - "3306:3306"
       - "33061:33061"   # 👈 tambahkan ini
+
+  # === Zabbix Server DC1 ===
+  zabbix-server:
+    build:
+      context: ../zabbix
+      dockerfile: Dockerfile.server
+    container_name: zbx-server-dc1
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      HANodeName: "dc1"
+    ports:
+      - "10051:10051"
+    depends_on:
+      - mysql1
+
+  # === Zabbix Web DC1 ===
+  zabbix-web:
+    build:
+      context: ../zabbix
+      dockerfile: Dockerfile.web
+    container_name: zbx-web-dc1
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      ZBX_SERVER_HOST: "127.0.0.1"
+      PHP_TZ: "Asia/Jakarta"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - zabbix-server
 
 
 ====================== ./dc1/keepalived/keepalived.conf ======================
@@ -131,6 +171,9 @@ EXPOSE 10051
 CMD ["docker-entrypoint.sh"]
 
 ====================== ./dc2/docker-compose.yml ======================
+version: '3.8'
+
+services:
   # === MySQL DC2 ===
   mysql2:
     build:
@@ -147,6 +190,43 @@ CMD ["docker-entrypoint.sh"]
     ports:
       - "3306:3306"
       - "33061:33061"   # 👈 tambahkan ini
+
+  # === Zabbix Server DC2 ===
+  zabbix-server:
+    build:
+      context: ../zabbix
+      dockerfile: Dockerfile.server
+    container_name: zbx-server-dc2
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      HANodeName: "dc2"
+    ports:
+      - "10051:10051"
+    depends_on:
+      - mysql2
+
+  # === Zabbix Web DC2 ===
+  zabbix-web:
+    build:
+      context: ../zabbix
+      dockerfile: Dockerfile.web
+    container_name: zbx-web-dc2
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      ZBX_SERVER_HOST: "127.0.0.1"
+      PHP_TZ: "Asia/Jakarta"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - zabbix-server
 
 
 ====================== ./dc2/keepalived/keepalived.conf ======================
@@ -611,7 +691,7 @@ loose-group_replication_group_name="b9a2b7a2-5f4c-4f8c-9b2e-1c1d9f00a001"
 loose-group_replication_start_on_boot=OFF
 loose-group_replication_bootstrap_group=OFF
 loose-group_replication_local_address="10.7.0.4:33061"
-loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061,10.7.0.6:33061"
+loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
 
 # Mode single-primary
 loose-group_replication_single_primary_mode=ON
