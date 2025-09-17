@@ -35,30 +35,34 @@ mysql-ha/
 
 ====================== ./dc1/docker-compose.dc1.yml ======================
 version: '3.8'
-
-networks:
-  zabbix_net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.11.12.0/24
-
 services:
-  mysql1:
-    image: mysql:8.0.30
-    container_name: mysql1
+  zabbix-server:
+    image: zabbix/zabbix-server-mysql:alpine-6.4-latest
+    container_name: zbx-server-dc1
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
-    volumes:
-      - /opt/mysql:/var/lib/mysql
-      - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf
-      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      HANodeName: "dc1"
     ports:
-      - "3306:3306"
-    networks:
-      zabbix_net:
-        ipv4_address: 10.11.12.2
+      - "10051:10051"
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-mysql:alpine-6.4-latest
+    container_name: zbx-web-dc1
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      ZBX_SERVER_HOST: "127.0.0.1"
+      PHP_TZ: "Asia/Jakarta"
+    ports:
+      - "8080:8080"
+
 
 ====================== ./dc1/keepalived/keepalived.conf ======================
 global_defs {
@@ -140,30 +144,34 @@ CMD ["docker-entrypoint.sh"]
 
 ====================== ./dc2/docker-compose.dc2.yml ======================
 version: '3.8'
-
-networks:
-  zabbix_net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.11.12.0/24
-
 services:
-  mysql2:
-    image: mysql:8.0.30
-    container_name: mysql2
+  zabbix-server:
+    image: zabbix/zabbix-server-mysql:alpine-6.4-latest
+    container_name: zbx-server-dc2
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: "AndesMysql123!"
-    volumes:
-      - /opt/mysql:/var/lib/mysql
-      - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf
-      - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      HANodeName: "dc2"
     ports:
-      - "3306:3306"
-    networks:
-      zabbix_net:
-        ipv4_address: 10.11.12.3
+      - "10051:10051"
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-mysql:alpine-6.4-latest
+    container_name: zbx-web-dc2
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "AndesZabbix!"
+      ZBX_SERVER_HOST: "127.0.0.1"
+      PHP_TZ: "Asia/Jakarta"
+    ports:
+      - "8080:8080"
+
 
 ====================== ./dc2/keepalived/keepalived.conf ======================
 global_defs {
@@ -484,10 +492,11 @@ transaction_write_set_extraction=XXHASH64
 # Group Replication Config
 loose-group_replication_group_name="b9a2b7a2-5f4c-4f8c-9b2e-1c1d9f00a001"
 loose-group_replication_start_on_boot=OFF
-loose-group_replication_local_address="10.11.12.2:33061"
-loose-group_replication_group_seeds="10.11.12.2:33061,10.11.12.3:33061"
+loose-group_replication_local_address="10.7.0.4:33061"
+loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF
+
 
 ====================== ./mysql/my.cnf.dc2 ======================
 [mysqld]
@@ -506,7 +515,8 @@ transaction_write_set_extraction=XXHASH64
 # Group Replication Config
 loose-group_replication_group_name="b9a2b7a2-5f4c-4f8c-9b2e-1c1d9f00a001"
 loose-group_replication_start_on_boot=OFF
-loose-group_replication_local_address="10.11.12.3:33061"
-loose-group_replication_group_seeds="10.11.12.2:33061,10.11.12.3:33061"
+loose-group_replication_local_address="10.7.0.5:33061"
+loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF
+
