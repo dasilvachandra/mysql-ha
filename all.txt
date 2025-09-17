@@ -34,12 +34,11 @@ mysql-ha/
 - Mendukung deployment berbasis Docker Compose maupun integrasi ke sistem produksi.
 
 ====================== ./dc1/docker-compose.yml ======================
-version: '3.8'
-
-services:
   # === MySQL DC1 ===
   mysql1:
-    image: mysql:8.0.30
+    build:
+      context: ../mysql
+      dockerfile: Dockerfile
     container_name: mysql1
     restart: unless-stopped
     environment:
@@ -50,39 +49,7 @@ services:
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "3306:3306"
-
-  # === Zabbix Server DC1 ===
-  zabbix-server:
-    image: zabbix/zabbix-server-mysql:alpine-6.4-latest
-    container_name: zbx-server-dc1
-    restart: unless-stopped
-    environment:
-      DB_SERVER_HOST: "10.7.0.10"     # VIP Keepalived
-      MYSQL_DATABASE: "zabbix"
-      MYSQL_USER: "zabbix"
-      MYSQL_PASSWORD: "AndesZabbix!"
-      HANodeName: "dc1"
-    ports:
-      - "10051:10051"
-    depends_on:
-      - mysql1
-
-  # === Zabbix Web DC1 ===
-  zabbix-web:
-    image: zabbix/zabbix-web-nginx-mysql:alpine-6.4-latest
-    container_name: zbx-web-dc1
-    restart: unless-stopped
-    environment:
-      DB_SERVER_HOST: "10.7.0.10"     # VIP Keepalived
-      MYSQL_DATABASE: "zabbix"
-      MYSQL_USER: "zabbix"
-      MYSQL_PASSWORD: "AndesZabbix!"
-      ZBX_SERVER_HOST: "127.0.0.1"
-      PHP_TZ: "Asia/Jakarta"
-    ports:
-      - "8080:8080"
-    depends_on:
-      - zabbix-server
+      - "33061:33061"   # 👈 tambahkan ini
 
 
 ====================== ./dc1/keepalived/keepalived.conf ======================
@@ -164,12 +131,11 @@ EXPOSE 10051
 CMD ["docker-entrypoint.sh"]
 
 ====================== ./dc2/docker-compose.yml ======================
-version: '3.8'
-
-services:
   # === MySQL DC2 ===
   mysql2:
-    image: mysql:8.0.30
+    build:
+      context: ../mysql
+      dockerfile: Dockerfile
     container_name: mysql2
     restart: unless-stopped
     environment:
@@ -180,39 +146,7 @@ services:
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "3306:3306"
-
-  # === Zabbix Server DC2 ===
-  zabbix-server:
-    image: zabbix/zabbix-server-mysql:alpine-6.4-latest
-    container_name: zbx-server-dc2
-    restart: unless-stopped
-    environment:
-      DB_SERVER_HOST: "10.7.0.10"     # VIP Keepalived
-      MYSQL_DATABASE: "zabbix"
-      MYSQL_USER: "zabbix"
-      MYSQL_PASSWORD: "AndesZabbix!"
-      HANodeName: "dc2"
-    ports:
-      - "10051:10051"
-    depends_on:
-      - mysql2
-
-  # === Zabbix Web DC2 ===
-  zabbix-web:
-    image: zabbix/zabbix-web-nginx-mysql:alpine-6.4-latest
-    container_name: zbx-web-dc2
-    restart: unless-stopped
-    environment:
-      DB_SERVER_HOST: "10.7.0.10"     # VIP Keepalived
-      MYSQL_DATABASE: "zabbix"
-      MYSQL_USER: "zabbix"
-      MYSQL_PASSWORD: "AndesZabbix!"
-      ZBX_SERVER_HOST: "127.0.0.1"
-      PHP_TZ: "Asia/Jakarta"
-    ports:
-      - "8080:8080"
-    depends_on:
-      - zabbix-server
+      - "33061:33061"   # 👈 tambahkan ini
 
 
 ====================== ./dc2/keepalived/keepalived.conf ======================
@@ -307,12 +241,20 @@ Cluster **MySQL High Availability + Zabbix HA** lintas Data Center menggunakan *
 
 ====================== ./git-pull.sh ======================
 #!/bin/bash
-# Script otomatis git pull dengan timestamp log
+# Script otomatis git force pull dengan timestamp log
 
 TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
 
-echo "🔄 [$TIMESTAMP] Menarik update terbaru dari remote..."
-git pull origin main
+echo "🔄 [$TIMESTAMP] Menarik update terbaru (force pull) dari remote..."
+
+# Ambil semua update remote
+git fetch --all
+
+# Reset ke remote main (hapus perubahan lokal)
+git reset --hard origin/main
+
+echo "✅ [$TIMESTAMP] Force pull selesai (sinkron dengan origin/main)"
+
 
 ====================== ./git-push.sh ======================
 #!/bin/bash
@@ -331,17 +273,33 @@ git commit -m "update: $TIMESTAMP"
 echo "🚀 Push ke remote (origin main)..."
 git push origin main
 
+====================== ./hub/Dockerfile ======================
+FROM haproxy:2.8
+
+LABEL maintainer="Andes Solutions"
+
+# Tambahkan tools troubleshooting
+RUN apt-get update && \
+    apt-get install -y iputils-ping net-tools iproute2 dnsutils curl vim traceroute tcpdump && \
+    rm -rf /var/lib/apt/lists/*
+
+CMD ["haproxy", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+
+
 ====================== ./hub/docker-compose.yml ======================
 version: '3.8'
 
 services:
   haproxy:
-    image: haproxy:2.8
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: haproxy-hub
     restart: unless-stopped
-    network_mode: "host"   # supaya bisa listen langsung ke IP VIP hub
+    network_mode: "host"
     volumes:
       - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+
 
 ====================== ./hub/haproxy.cfg ======================
 global
@@ -507,6 +465,18 @@ echo ""
 echo "✅ Semua isi file tersimpan ke: $OUTPUT_FILE"
 
 
+====================== ./mysql/Dockerfile ======================
+FROM mysql:8.0.30
+
+LABEL maintainer="Andes Solutions"
+
+# Tambahkan tools troubleshooting
+RUN microdnf install -y iputils net-tools iproute dnsutils curl vim traceroute tcpdump && \
+    microdnf clean all
+
+CMD ["mysqld"]
+
+
 ====================== ./mysql/bootstrap_gr.sh ======================
 #!/usr/bin/env bash
 set -euo pipefail
@@ -522,9 +492,18 @@ REPL_USER="repl"
 REPL_PASS="AndesRepl!"
 SQL_FILE="$(dirname "$0")/bootstrap_gr.sql"
 
-log() {
-  echo "[$(date '+%F %T')] $*"
-}
+log() { echo "[$(date '+%F %T')] $*"; }
+
+# Pastikan parameter
+if [[ $# -eq 0 ]]; then
+  echo "❌ Harus ada parameter: dc1 atau dc2"
+  echo "   Contoh:"
+  echo "     ./bootstrap_gr.sh dc1"
+  echo "     ./bootstrap_gr.sh dc2"
+  exit 1
+fi
+
+NODE="$1"
 
 # Pastikan file SQL ada
 if [[ ! -f "$SQL_FILE" ]]; then
@@ -532,43 +511,48 @@ if [[ ! -f "$SQL_FILE" ]]; then
   exit 1
 fi
 
-# =====================================
-# Apply SQL ke DC1 dan DC2
-# =====================================
-log "Apply SQL ke mysql1 (DC1)..."
-docker exec -i mysql1 mysql -uroot -p"$ROOT_PASS" < "$SQL_FILE"
+case "$NODE" in
+  dc1)
+    log "Apply SQL ke mysql1 (DC1)..."
+    docker exec -i mysql1 mysql -uroot -p"$ROOT_PASS" < "$SQL_FILE"
 
-log "Apply SQL ke mysql2 (DC2)..."
-docker exec -i mysql2 mysql -uroot -p"$ROOT_PASS" < "$SQL_FILE"
-
-# =====================================
-# Bootstrap cluster di DC1
-# =====================================
-log "Bootstrap cluster di mysql1 (DC1)..."
-docker exec -i mysql1 mysql -uroot -p"$ROOT_PASS" <<EOF
+    log "Bootstrap cluster di mysql1 (DC1)..."
+    docker exec -i mysql1 mysql -uroot -p"$ROOT_PASS" <<EOF
 SET GLOBAL group_replication_bootstrap_group=ON;
 START GROUP_REPLICATION USER='$REPL_USER', PASSWORD='$REPL_PASS';
 SET GLOBAL group_replication_bootstrap_group=OFF;
 EOF
+    ;;
 
-# =====================================
-# Join cluster di DC2
-# =====================================
-log "Join cluster di mysql2 (DC2)..."
-docker exec -i mysql2 mysql -uroot -p"$ROOT_PASS" <<EOF
+  dc2)
+    log "Apply SQL ke mysql2 (DC2)..."
+    docker exec -i mysql2 mysql -uroot -p"$ROOT_PASS" < "$SQL_FILE"
+
+    log "Join cluster di mysql2 (DC2)..."
+    docker exec -i mysql2 mysql -uroot -p"$ROOT_PASS" <<EOF
 START GROUP_REPLICATION USER='$REPL_USER', PASSWORD='$REPL_PASS';
 EOF
+    ;;
+
+  *)
+    echo "❌ Parameter tidak valid: $NODE"
+    echo "Gunakan: dc1 atau dc2"
+    exit 1
+    ;;
+esac
 
 # =====================================
-# Cek status cluster
+# Cek status cluster (dari DC1 saja)
 # =====================================
-log "Cek status cluster..."
-docker exec -i mysql1 mysql -uroot -p"$ROOT_PASS" -e "
-SELECT MEMBER_HOST, MEMBER_ROLE, MEMBER_STATE
-FROM performance_schema.replication_group_members;
-"
+if [[ "$NODE" == "dc1" ]]; then
+  log "Cek status cluster dari DC1..."
+  docker exec -i mysql1 mysql -uroot -p"$ROOT_PASS" -e "
+  SELECT MEMBER_HOST, MEMBER_ROLE, MEMBER_STATE
+  FROM performance_schema.replication_group_members;
+  "
+fi
 
-log "✅ Bootstrap selesai!"
+log "✅ Bootstrap selesai untuk $NODE"
 
 
 ====================== ./mysql/bootstrap_gr.sql ======================
@@ -609,8 +593,9 @@ SET GLOBAL log_bin_trust_function_creators = 1;
 server_id=1
 bind-address=0.0.0.0
 
-# Binary log untuk GTID
+# Binary log & GTID (wajib untuk Group Replication)
 log_bin=binlog
+binlog_format=ROW
 gtid_mode=ON
 enforce_gtid_consistency=ON
 binlog_checksum=NONE
@@ -618,14 +603,22 @@ master_info_repository=TABLE
 relay_log_info_repository=TABLE
 transaction_write_set_extraction=XXHASH64
 
+# Load plugin Group Replication
+plugin-load-add=group_replication.so
+
 # Group Replication Config
 loose-group_replication_group_name="b9a2b7a2-5f4c-4f8c-9b2e-1c1d9f00a001"
 loose-group_replication_start_on_boot=OFF
+loose-group_replication_bootstrap_group=OFF
 loose-group_replication_local_address="10.7.0.4:33061"
-loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
+loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061,10.7.0.6:33061"
+
+# Mode single-primary
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF
-loose-group_replication_ip_whitelist="10.7.0.4,10.7.0.5"
+
+# Allowlist antar node
+loose-group_replication_ip_allowlist="10.7.0.4,10.7.0.5,10.7.0.6"
 
 
 ====================== ./mysql/my.cnf.dc2 ======================
@@ -633,8 +626,8 @@ loose-group_replication_ip_whitelist="10.7.0.4,10.7.0.5"
 server_id=2
 bind-address=0.0.0.0
 
-# Binary log untuk GTID
 log_bin=binlog
+binlog_format=ROW
 gtid_mode=ON
 enforce_gtid_consistency=ON
 binlog_checksum=NONE
@@ -642,12 +635,126 @@ master_info_repository=TABLE
 relay_log_info_repository=TABLE
 transaction_write_set_extraction=XXHASH64
 
-# Group Replication Config
+plugin-load-add=group_replication.so
+
 loose-group_replication_group_name="b9a2b7a2-5f4c-4f8c-9b2e-1c1d9f00a001"
 loose-group_replication_start_on_boot=OFF
+loose-group_replication_bootstrap_group=OFF
 loose-group_replication_local_address="10.7.0.5:33061"
-loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
+loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061,10.7.0.6:33061"
+
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF
-loose-group_replication_ip_whitelist="10.7.0.4,10.7.0.5"
+
+loose-group_replication_ip_allowlist="10.7.0.4,10.7.0.5,10.7.0.6"
+
+
+====================== ./mysql/reset_gr.sh ======================
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_PASS="AndesMysql123!"
+
+log() { echo "[$(date '+%F %T')] $*"; }
+
+# Pastikan parameter
+if [[ $# -eq 0 ]]; then
+  echo "❌ Harus ada parameter: dc1 atau dc2"
+  echo "   Contoh: ./reset_gr.sh dc1"
+  echo "           ./reset_gr.sh dc2"
+  exit 1
+fi
+
+NODE="$1"
+CONTAINER=""
+
+case "$NODE" in
+  dc1) CONTAINER="mysql1" ;;
+  dc2) CONTAINER="mysql2" ;;
+  *)
+    echo "❌ Parameter tidak valid: $NODE"
+    echo "Gunakan: dc1 atau dc2"
+    exit 2
+    ;;
+esac
+
+log "👉 Reset $NODE ($CONTAINER)..."
+
+docker exec -i "$CONTAINER" mysql -uroot -p"$ROOT_PASS" <<EOF || true
+STOP GROUP_REPLICATION;
+UNINSTALL PLUGIN group_replication;
+DROP USER IF EXISTS 'repl'@'%';
+EOF
+
+docker exec -i "$CONTAINER" rm -f /var/lib/mysql/auto.cnf || true
+
+docker restart "$CONTAINER"
+
+log "✅ $NODE ($CONTAINER) selesai direset"
+log "ℹ️ Jalankan bootstrap_gr.sh $NODE untuk inisialisasi ulang"
+
+
+====================== ./rebuild.sh ======================
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE_DIR="$(dirname "$0")"
+
+if [[ $# -eq 0 ]]; then
+  echo "❌ Harus ada parameter! Contoh:"
+  echo "   ./rebuild.sh dc1"
+  echo "   ./rebuild.sh dc2"
+  echo "   ./rebuild.sh hub"
+  exit 1
+fi
+
+TARGET="$1"
+TARGET_DIR="$BASE_DIR/$TARGET"
+
+if [[ ! -d "$TARGET_DIR" ]]; then
+  echo "❌ Folder $TARGET_DIR tidak ditemukan!"
+  exit 2
+fi
+
+echo "🚀 Rebuild docker compose untuk: $TARGET"
+echo "========================================="
+
+cd "$TARGET_DIR"
+
+echo "🔨 docker compose build..."
+docker compose build --no-cache
+
+echo "⬆️ docker compose up -d..."
+docker compose up -d
+
+echo "✅ $TARGET selesai"
+
+echo ""
+echo "🎉 Service $TARGET berhasil direbuild & dijalankan!"
+
+
+====================== ./zabbix/Dockerfile.server ======================
+FROM zabbix/zabbix-server-mysql:alpine-6.4-latest
+
+LABEL maintainer="Andes Solutions"
+
+USER root
+RUN apk add --no-cache bash curl vim iputils bind-tools net-tools iproute2 tcpdump
+USER zabbix
+
+EXPOSE 10051
+CMD ["docker-entrypoint.sh"]
+
+
+====================== ./zabbix/Dockerfile.web ======================
+FROM zabbix/zabbix-web-nginx-mysql:alpine-6.4-latest
+
+LABEL maintainer="Andes Solutions"
+
+USER root
+RUN apk add --no-cache bash curl vim iputils bind-tools net-tools iproute2 tcpdump
+USER zabbix
+
+EXPOSE 8080
+CMD ["docker-entrypoint.sh"]
 
