@@ -625,6 +625,7 @@ loose-group_replication_local_address="10.7.0.4:33061"
 loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF
+loose-group_replication_ip_whitelist="10.7.0.4,10.7.0.5"
 
 
 ====================== ./mysql/my.cnf.dc2 ======================
@@ -648,4 +649,5 @@ loose-group_replication_local_address="10.7.0.5:33061"
 loose-group_replication_group_seeds="10.7.0.4:33061,10.7.0.5:33061"
 loose-group_replication_single_primary_mode=ON
 loose-group_replication_enforce_update_everywhere_checks=OFF
+loose-group_replication_ip_whitelist="10.7.0.4,10.7.0.5"
 

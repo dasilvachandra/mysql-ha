@@ -1,0 +1,9 @@
+FROM zabbix/zabbix-web-nginx-mysql:alpine-6.4-latest
+
+LABEL maintainer="Andes Solutions"
+
+# Tambahkan tools troubleshooting
+RUN apk add --no-cache bash curl vim iputils bind-tools net-tools iproute2 tcpdump
+
+EXPOSE 8080
+CMD ["docker-entrypoint.sh"]
