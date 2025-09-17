@@ -96,6 +96,11 @@ vrrp_instance VI_1 {
 }
 
 
+====================== ./dc1/keepalived/keepalived.service.d/override.conf ======================
+[Unit]
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target wg-quick@wg0.service
+
 ====================== ./dc1/keepalived/scripts/notify.sh ======================
 #!/usr/bin/env bash
 set -euo pipefail
@@ -194,6 +199,11 @@ vrrp_instance VI_1 {
     notify_fault  "/etc/keepalived/scripts/notify.sh fault"
 }
 
+
+====================== ./dc2/keepalived/keepalived.service.d/override.conf ======================
+[Unit]
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target wg-quick@wg0.service
 
 ====================== ./dc2/keepalived/scripts/notify.sh ======================
 #!/usr/bin/env bash
