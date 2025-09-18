@@ -270,55 +270,9 @@ vrrp_instance VI_1 {
 
 
 ====================== ./dc2/keepalived/keepalived.service.d/override.conf ======================
-global
-    log /dev/log local0
-    maxconn 4096
-
-defaults
-    log global
-    mode tcp
-    option tcplog
-    timeout connect 5s
-    timeout client  60s
-    timeout server  60s
-    retries 3
-
-# =========================
-# MySQL via VIP (user/app connect ke 10.7.0.10:3306)
-# =========================
-frontend mysql_front
-    bind 10.7.0.10:3306
-    default_backend mysql_local
-
-backend mysql_local
-    mode tcp
-    option tcp-check
-    server localmysql 127.0.0.1:3306 check inter 2s fall 3 rise 2
-
-# =========================
-# Zabbix Server (10051) via VIP
-# =========================
-frontend zabbix_server_front
-    bind 10.7.0.10:10051
-    default_backend zabbix_server_local
-
-backend zabbix_server_local
-    mode tcp
-    option tcp-check
-    server localzbx 127.0.0.1:10051 check inter 2s fall 3 rise 2
-
-# =========================
-# Zabbix Web (8080) via VIP
-# =========================
-frontend zabbix_web_front
-    bind 10.7.0.10:8080
-    default_backend zabbix_web_local
-
-backend zabbix_web_local
-    mode tcp
-    option tcp-check
-    server localweb 127.0.0.1:8080 check inter 2s fall 3 rise 2
-
+[Unit]
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target wg-quick@wg0.service
 
 ====================== ./dc2/keepalived/scripts/demote_dc2.sql ======================
 -- Demote DC2 ke replica mengikuti VIP
@@ -642,71 +596,59 @@ SHOW REPLICA STATUS\G
 
 ====================== ./mysql/my.cnf.dc1 ======================
 [mysqld]
-# Identity
-server_id=1
-bind-address=0.0.0.0
+# ID unik untuk DC1
+server-id               = 1
 
-# Binary log wajib untuk replikasi
-log_bin=binlog
-binlog_format=ROW
-sync_binlog=1
+# Logging untuk replication
+log_bin                 = mysql-bin
+binlog_format           = ROW
+relay_log               = relay-log
+gtid_mode               = ON
+enforce_gtid_consistency= ON
+log_slave_updates       = ON
 
-# GTID (opsional tapi disarankan untuk failover otomatis/manual)
-gtid_mode=ON
-enforce_gtid_consistency=ON
+# Buffer & InnoDB
+innodb_flush_log_at_trx_commit = 1
+sync_binlog             = 1
 
-# Replikasi
-relay_log=relay-bin
-relay_log_index=relay-bin.index
-master_info_repository=TABLE
-relay_log_info_repository=TABLE
+# Charset default
+character-set-server    = utf8mb4
+collation-server        = utf8mb4_bin
 
-# Optimasi & keamanan
-skip_name_resolve=ON
-binlog_checksum=NONE
+# Penting untuk Zabbix
+default_authentication_plugin = mysql_native_password
 
-# Laporan host ke replica
-report_host=10.7.0.4
-report_port=3306
+# Network
+bind-address            = 0.0.0.0
 
-# Default karakter set
-character-set-server=utf8mb4
-collation-server=utf8mb4_general_ci
-log_bin_trust_function_creators = 1
 
 ====================== ./mysql/my.cnf.dc2 ======================
 [mysqld]
-# Identity
-server_id=2
-bind-address=0.0.0.0
+# ID unik untuk DC2
+server-id               = 2
 
-# Binary log tetap diaktifkan agar bisa promote DC2 jadi master jika DC1 down
-log_bin=binlog
-binlog_format=ROW
-sync_binlog=1
+# Logging untuk replication
+log_bin                 = mysql-bin
+binlog_format           = ROW
+relay_log               = relay-log
+gtid_mode               = ON
+enforce_gtid_consistency= ON
+log_slave_updates       = ON
 
-# GTID (sama dengan DC1)
-gtid_mode=ON
-enforce_gtid_consistency=ON
+# Buffer & InnoDB
+innodb_flush_log_at_trx_commit = 1
+sync_binlog             = 1
 
-# Relay log (wajib untuk replica)
-relay_log=relay-bin
-relay_log_index=relay-bin.index
-master_info_repository=TABLE
-relay_log_info_repository=TABLE
+# Charset default
+character-set-server    = utf8mb4
+collation-server        = utf8mb4_bin
 
-# Optimasi & keamanan
-skip_name_resolve=ON
-binlog_checksum=NONE
+# Penting untuk Zabbix
+default_authentication_plugin = mysql_native_password
 
-# Laporan host ke source
-report_host=10.7.0.5
-report_port=3306
+# Network
+bind-address            = 0.0.0.0
 
-# Default karakter set
-character-set-server=utf8mb4
-collation-server=utf8mb4_general_ci
-log_bin_trust_function_creators
 
 ====================== ./rebuild.sh ======================
 #!/usr/bin/env bash
@@ -747,7 +689,39 @@ echo ""
 echo "🎉 Service $TARGET berhasil direbuild & dijalankan!"
 
 
-====================== ./zabbix/docker-compose.yml ======================
+====================== ./reset.sh ======================
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "⚠️  WARNING: This will remove ALL Docker containers, images, volumes, and networks!"
+echo "Press Ctrl+C to cancel or wait 5 seconds to continue..."
+sleep 5
+
+echo "🛑 Stopping all containers..."
+docker stop $(docker ps -aq) 2>/dev/null || true
+
+echo "🗑 Removing all containers..."
+docker rm -f $(docker ps -aq) 2>/dev/null || true
+
+echo "🗑 Removing all volumes..."
+docker volume rm $(docker volume ls -q) 2>/dev/null || true
+
+echo "🗑 Cleaning MySQL data at /opt/mysql/..."
+rm -rf /opt/mysql/* || true
+
+echo "🗑 Removing all custom networks..."
+docker network rm $(docker network ls -q) 2>/dev/null || true
+
+echo "🗑 Removing all images..."
+docker rmi -f $(docker images -q) 2>/dev/null || true
+
+echo "🧹 Docker system prune..."
+docker system prune -af --volumes || true
+
+echo "✅ Docker environment fully reset!"
+
+
+====================== ./zabbix/docker-compose-dc1.yml ======================
 networks:
   zbxnet:
     external: true
@@ -784,6 +758,55 @@ services:
     restart: unless-stopped
     environment:
       DB_SERVER_HOST: "mysql1"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "abcdef"
+      PHP_TZ: "Asia/Jakarta"
+    networks:
+      - zbxnet
+    depends_on:
+      - zbx-server
+    ports:
+      - "8080:8080"
+
+
+====================== ./zabbix/docker-compose-dc2.yml ======================
+networks:
+  zbxnet:
+    external: true
+
+services:
+  zbx-server:
+    image: zabbix/zabbix-server-mysql:alpine-7.4-latest
+    container_name: zbx-server
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "mysql2"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "abcdef"
+      MYSQL_ROOT_PASSWORD: "abcdef"
+      TZ: "Asia/Jakarta"
+    networks:
+      - zbxnet
+    ports:
+      - "10051:10051"
+    cap_add:
+      - NET_RAW
+    depends_on:
+      - mysql2
+    healthcheck:
+      test: ["CMD", "pgrep", "zabbix_server"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zbx-frontend:
+    image: zabbix/zabbix-web-nginx-mysql:alpine-7.4-latest
+    container_name: zbx-frontend
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "mysql2"
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "abcdef"

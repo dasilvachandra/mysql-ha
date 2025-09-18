@@ -1,0 +1,46 @@
+networks:
+  zbxnet:
+    external: true
+
+services:
+  zbx-server:
+    image: zabbix/zabbix-server-mysql:alpine-7.4-latest
+    container_name: zbx-server
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "mysql2"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "abcdef"
+      MYSQL_ROOT_PASSWORD: "abcdef"
+      TZ: "Asia/Jakarta"
+    networks:
+      - zbxnet
+    ports:
+      - "10051:10051"
+    cap_add:
+      - NET_RAW
+    depends_on:
+      - mysql2
+    healthcheck:
+      test: ["CMD", "pgrep", "zabbix_server"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zbx-frontend:
+    image: zabbix/zabbix-web-nginx-mysql:alpine-7.4-latest
+    container_name: zbx-frontend
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: "mysql2"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "abcdef"
+      PHP_TZ: "Asia/Jakarta"
+    networks:
+      - zbxnet
+    depends_on:
+      - zbx-server
+    ports:
+      - "8080:8080"
