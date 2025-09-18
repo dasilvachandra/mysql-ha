@@ -131,6 +131,7 @@ vrrp_script chk_mysql_primary {
 
 vrrp_instance VI_DB {
   state BACKUP
+  initial_state BACKUP
   interface wg0
   virtual_router_id 51
   priority 200
@@ -151,7 +152,7 @@ vrrp_instance VI_DB {
     10.7.0.10/32 dev wg0 label wg0:vip
   }
 
-  # Hanya pegang VIP jika script return 0 (PRIMARY)
+  # Hanya pegang VIP kalau MySQL benar2 PRIMARY
   track_script {
     chk_mysql_primary
   }
@@ -160,7 +161,6 @@ vrrp_instance VI_DB {
   notify_backup "/etc/keepalived/scripts/notify.sh backup"
   notify_fault  "/etc/keepalived/scripts/notify.sh fault"
 }
-
 
 ====================== ./dc1/keepalived/keepalived.service.d/override.conf ======================
 [Unit]
@@ -321,6 +321,7 @@ vrrp_script chk_mysql_primary {
 
 vrrp_instance VI_DB {
   state BACKUP
+  initial_state BACKUP
   interface wg0
   virtual_router_id 51
   priority 150
@@ -349,7 +350,6 @@ vrrp_instance VI_DB {
   notify_backup "/etc/keepalived/scripts/notify.sh backup"
   notify_fault  "/etc/keepalived/scripts/notify.sh fault"
 }
-
 
 ====================== ./dc2/keepalived/keepalived.service.d/override.conf ======================
 global
