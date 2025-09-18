@@ -959,12 +959,12 @@ relay_log_index=relay-bin.index
 master_info_repository=TABLE
 relay_log_info_repository=TABLE
 
-# Semi-sync replication (failover RPO rendah)
-plugin_load_add=semisync_master.so
-plugin_load_add=semisync_replication.so
-rpl_semi_sync_master_enabled=ON
+# Semi-sync replication (RPO rendah)
+plugin_load_add=semisync_source.so
+plugin_load_add=semisync_replica.so
+rpl_semi_sync_source_enabled=ON
 rpl_semi_sync_replica_enabled=ON
-rpl_semi_sync_master_timeout=1000   # 1s timeout menunggu ack replica
+rpl_semi_sync_source_timeout=1000   # 1s
 
 # Optimasi & keamanan
 skip_name_resolve=ON
@@ -1000,12 +1000,13 @@ relay_log_index=relay-bin.index
 master_info_repository=TABLE
 relay_log_info_repository=TABLE
 
-# Semi-sync replication (failover RPO rendah)
-plugin_load_add=semisync_master.so
-plugin_load_add=semisync_replication.so
-rpl_semi_sync_master_enabled=ON
+# Semi-sync replication (RPO rendah)
+plugin_load_add=semisync_source.so
+plugin_load_add=semisync_replica.so
+rpl_semi_sync_source_enabled=ON
 rpl_semi_sync_replica_enabled=ON
-rpl_semi_sync_master_timeout=1000
+rpl_semi_sync_source_timeout=1000
+
 
 # Optimasi & keamanan
 skip_name_resolve=ON
