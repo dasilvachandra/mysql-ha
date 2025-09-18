@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# === PARAMETER ===
 DC="${1:-}"
 if [[ -z "$DC" ]]; then
   echo "Usage: $0 <dc1|dc2>"
@@ -13,7 +12,14 @@ if [[ "$DC" != "dc1" && "$DC" != "dc2" ]]; then
   exit 1
 fi
 
-SRC_DIR="$(dirname "$0")/../$DC/keepalived"
+# Tentukan base path = folder tempat script ini berada
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+SRC_DIR="$BASE_DIR/$DC/keepalived"
+
+if [[ ! -d "$SRC_DIR" ]]; then
+  echo "Error: Direktori $SRC_DIR tidak ditemukan"
+  exit 1
+fi
 
 echo "[INFO] Install keepalived + mysql-client"
 apt update -y
@@ -27,8 +33,8 @@ echo "[INFO] Copy konfigurasi keepalived ($DC)"
 cp "$SRC_DIR/keepalived.conf" /etc/keepalived/keepalived.conf
 
 echo "[INFO] Copy semua script SQL & bash"
-cp "$SRC_DIR/scripts/"*.sh /etc/keepalived/scripts/ || true
-cp "$SRC_DIR/scripts/"*.sql /etc/keepalived/scripts/ || true
+cp "$SRC_DIR/scripts/"*.sh /etc/keepalived/scripts/ 2>/dev/null || true
+cp "$SRC_DIR/scripts/"*.sql /etc/keepalived/scripts/ 2>/dev/null || true
 chmod +x /etc/keepalived/scripts/*.sh || true
 
 if [[ -f "$SRC_DIR/keepalived.service.d/override.conf" ]]; then
