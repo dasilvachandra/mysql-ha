@@ -1,41 +1,40 @@
-version: "3.8"
-
 services:
   # One-shot init job: import schema/images/data kalau DB masih kosong
   zbx-db-init:
-    image: zabbix/zabbix-sql-scripts:alpine-7.0-latest
+    image: zabbix/zabbix-server-mysql:alpine-7.0-latest
     container_name: zbx-db-init
     environment:
-      DB_HOST: ${DB_SERVER_HOST}
-      DB_PORT: ${DB_SERVER_PORT}
+      DB_SERVER_HOST: ${DB_SERVER_HOST}
+      DB_SERVER_PORT: ${DB_SERVER_PORT}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       TZ: ${TZ}
+      FORCE_REIMPORT: ${FORCE_REIMPORT:-0}
     entrypoint: ["/bin/sh","-lc"]
-    command: >-
-      'set -e;
-       echo "[zbx-db-init] Waiting DB ${DB_HOST}:${DB_PORT}";
-       until mysql -h${DB_HOST} -P${DB_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD} -e "SELECT 1" ${MYSQL_DATABASE} >/dev/null 2>&1; do
-         sleep 2; echo -n .; done; echo;
-       cnt=$(mysql -N -h${DB_HOST} -P${DB_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD}
-         -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${MYSQL_DATABASE}'");
-       echo "[zbx-db-init] Tables in ${MYSQL_DATABASE}: $cnt";
-       if [ "${FORCE_REIMPORT:-0}" = "1" ]; then cnt=0; fi;
-       if [ "$cnt" -lt 10 ]; then
-         echo "[zbx-db-init] Importing schema...";
-         zcat /usr/share/doc/zabbix-sql-scripts/mysql/schema.sql.gz | \
-           mysql -h${DB_HOST} -P${DB_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE};
-         echo "[zbx-db-init] Importing images...";
-         zcat /usr/share/doc/zabbix-sql-scripts/mysql/images.sql.gz | \
-           mysql -h${DB_HOST} -P${DB_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE};
-         echo "[zbx-db-init] Importing data...";
-         zcat /usr/share/doc/zabbix-sql-scripts/mysql/data.sql.gz | \
-           mysql -h${DB_HOST} -P${DB_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE};
-         echo "[zbx-db-init] Done.";
-       else
-         echo "[zbx-db-init] Database already initialized; skip.";
-       fi'
+    command: >
+      set -e;
+      echo "[zbx-db-init] Waiting DB ${DB_SERVER_HOST}:${DB_SERVER_PORT}";
+      until mysql -h${DB_SERVER_HOST} -P${DB_SERVER_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD} -e "SELECT 1" ${MYSQL_DATABASE} >/dev/null 2>&1; do
+        sleep 2; echo -n .; done; echo;
+      cnt=$(mysql -N -h${DB_SERVER_HOST} -P${DB_SERVER_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD}
+        -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${MYSQL_DATABASE}'");
+      echo "[zbx-db-init] Tables in ${MYSQL_DATABASE}: $cnt";
+      if [ "${FORCE_REIMPORT}" = "1" ]; then cnt=0; fi;
+      if [ "$cnt" -lt 10 ]; then
+        echo "[zbx-db-init] Importing schema...";
+        zcat /usr/share/doc/zabbix-sql-scripts/mysql/schema.sql.gz | \
+          mysql -h${DB_SERVER_HOST} -P${DB_SERVER_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE};
+        echo "[zbx-db-init] Importing images...";
+        zcat /usr/share/doc/zabbix-sql-scripts/mysql/images.sql.gz | \
+          mysql -h${DB_SERVER_HOST} -P${DB_SERVER_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE};
+        echo "[zbx-db-init] Importing data...";
+        zcat /usr/share/doc/zabbix-sql-scripts/mysql/data.sql.gz | \
+          mysql -h${DB_SERVER_HOST} -P${DB_SERVER_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE};
+        echo "[zbx-db-init] Done.";
+      else
+        echo "[zbx-db-init] Database already initialized; skip.";
+      fi
     restart: "no"
     networks: [zbx_net]
 
@@ -55,7 +54,7 @@ services:
       ZBX_DEBUGLEVEL: ${ZBX_DEBUGLEVEL}
       TZ: ${TZ}
     ports:
-      - "10051:10051"   # port Zabbix server untuk agent/proxy
+      - "10051:10051"
     volumes:
       - zbx_srv_data:/var/lib/zabbix
       - zbx_srv_log:/var/log/zabbix
