@@ -1,4 +1,4 @@
--- Promote DC1 jadi writer
+-- Promote DC1 (writer)
 STOP REPLICA;
 RESET REPLICA ALL;
 SET GLOBAL super_read_only=0;

@@ -1,9 +1,8 @@
--- Demote DC2 jadi replica ke VIP
+-- Demote DC2 ke replica mengikuti VIP
 SET GLOBAL super_read_only=1;
 SET GLOBAL read_only=1;
 STOP REPLICA;
 RESET REPLICA ALL;
-
 CHANGE REPLICATION SOURCE TO
   SOURCE_HOST           = '10.7.0.10',
   SOURCE_PORT           = 3306,
@@ -11,5 +10,4 @@ CHANGE REPLICATION SOURCE TO
   SOURCE_PASSWORD       = 'abcdef',
   SOURCE_AUTO_POSITION  = 1,
   GET_SOURCE_PUBLIC_KEY = 1;
-
 START REPLICA;

@@ -4,38 +4,73 @@ set -euo pipefail
 TYPE="${1:-}"
 LOG="/var/log/keepalived-notify.log"
 
+# MySQL lokal (container di DC2)
 MYSQL_CMD="docker exec -i mysql2 mysql -uroot -pabcdef"
 
+# MySQL remote (langsung TCP ke DC1)
+REMOTE_MYSQL="mysql -h10.7.0.4 -uha -pHaPassw0rd! --connect-timeout=3"
+
+# File SQL lokal (DC2) & remote (DC1)
+SQL_PROMOTE_LOCAL="/etc/keepalived/scripts/promote_dc2.sql"
+SQL_DEMOTE_LOCAL="/etc/keepalived/scripts/demote_dc2.sql"
+SQL_PROMOTE_REMOTE="/etc/keepalived/scripts/promote_dc1.sql"
+SQL_DEMOTE_REMOTE="/etc/keepalived/scripts/demote_dc1.sql"
+
+# Hub (opsional)
+HUB="10.7.0.1"
+SSH_OPTS="-o StrictHostKeyChecking=no -q -T"
+
 ts(){ date '+%F %T'; }
+log(){ echo "[$(ts)] $*" | tee -a "$LOG"; }
+
+# Helper cek read_only remote (DC1)
+remote_ro(){
+  mysql -h10.7.0.4 -uha -pHaPassw0rd! -Nse "SELECT @@read_only" 2>/dev/null || echo "ERR"
+}
 
 echo "[$(ts)] DC2 VRRP event: $TYPE" >> "$LOG"
 
 case "$TYPE" in
   master)
-    # Arahkan route di hub ke db2
-    ssh -o StrictHostKeyChecking=no root@10.7.0.1 -q -T "switch-db-route.sh db2" >> "$LOG" 2>&1
+    # 1) DEMOTE PEER (DC1) dulu → replica ke VIP (anti dual-writer)
+    log "Demote DC1 ke REPLICA (VIP)"
+    if ! $REMOTE_MYSQL < "$SQL_DEMOTE_REMOTE" >> "$LOG" 2>&1; then
+      log "ERROR: demote DC1 gagal → ABORT promote (hindari dual-writer)"
+      exit 1
+    fi
+    rro="$(remote_ro)"
+    [[ "$rro" == "1" ]] || log "WARNING: verifikasi remote @@read_only=$rro"
 
-    # Promote DC2
-    $MYSQL_CMD < /etc/keepalived/scripts/promote_dc2.sql >> "$LOG" 2>&1
+    # 2) PROMOTE lokal (DC2) jadi writer
+    log "Promote DC2 jadi WRITER"
+    $MYSQL_CMD < "$SQL_PROMOTE_LOCAL" >> "$LOG" 2>&1
 
-    # Remote DC1 dipaksa jadi replica ke VIP
-    mysql -h10.7.0.4 -uha -pHaPassw0rd! < /etc/keepalived/scripts/demote_dc2.sql >> "$LOG" 2>&1
+    # 3) Switch route di HUB ke db2 (setelah writer siap)
+    ssh $SSH_OPTS "root@$HUB" "switch-db-route.sh db2" >> "$LOG" 2>&1 || true
 
-    echo "[$(ts)] Sukses MASTER handler: DC2 WRITER, DC1 REPLICA" >> "$LOG"
+    log "Sukses MASTER handler: DC2 WRITER, DC1 REPLICA"
     ;;
+
   backup)
-    # DC2 jadi replica ke VIP (anggap DC1 writer)
-    $MYSQL_CMD < /etc/keepalived/scripts/demote_dc2.sql >> "$LOG" 2>&1
+    # 1) DEMOTE lokal (DC2) → replica ke VIP
+    log "Demote DC2 ke REPLICA (VIP)"
+    $MYSQL_CMD < "$SQL_DEMOTE_LOCAL" >> "$LOG" 2>&1 || { log "ERROR: demote DC2 gagal"; exit 1; }
 
-    # Pastikan DC1 dibuka write
-    mysql -h10.7.0.4 -uha -pHaPassw0rd! < /etc/keepalived/scripts/promote_dc2.sql >> "$LOG" 2>&1
+    # 2) PROMOTE remote (DC1) jadi writer (best-effort)
+    log "Promote DC1 jadi WRITER"
+    $REMOTE_MYSQL < "$SQL_PROMOTE_REMOTE" >> "$LOG" 2>&1 || log "WARNING: promote DC1 gagal (cek manual)"
 
-    echo "[$(ts)] Sukses BACKUP handler: DC2 REPLICA, DC1 WRITER" >> "$LOG"
+    # 3) Switch route di HUB ke db1
+    ssh $SSH_OPTS "root@$HUB" "switch-db-route.sh db1" >> "$LOG" 2>&1 || true
+
+    log "Sukses BACKUP handler: DC2 REPLICA, DC1 WRITER"
     ;;
+
   fault)
-    echo "[$(ts)] DC2 fault condition (no-op)" >> "$LOG"
+    log "DC2 fault condition (no-op)"
     ;;
+
   *)
-    echo "[$(ts)] Event tidak dikenal: $TYPE" >> "$LOG"
+    log "Event tidak dikenal: $TYPE"
     ;;
 esac
