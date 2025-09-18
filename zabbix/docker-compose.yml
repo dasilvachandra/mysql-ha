@@ -8,7 +8,7 @@ services:
     container_name: zbx-server
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "mysql1"
+      DB_SERVER_HOST: "10.7.0.10"
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "abcdef"
