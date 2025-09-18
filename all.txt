@@ -82,11 +82,12 @@ echo "[SUCCESS] SQL $SQL_FILE berhasil dijalankan di $DC"
 ====================== ./dc1/docker-compose.yml ======================
 networks:
   zbxnet:
+    driver: bridge
     external: true
 
 services:
   # =========================
-  # MySQL DC1 (10.7.0.4)
+  # MySQL DC1 (10.7.0.1)
   # =========================
   mysql1:
     build:
@@ -202,6 +203,7 @@ SET GLOBAL read_only=0;
 ====================== ./dc2/docker-compose.yml ======================
 networks:
   zbxnet:
+    driver: bridge
     external: true
 
 services:
@@ -725,57 +727,55 @@ networks:
     external: true
 
 services:
-  # =========================
-  # Zabbix Server DC1
-  # =========================
   zbx-server-01:
     image: zabbix/zabbix-server-mysql:alpine-7.4-latest
     container_name: zbx-server-01
-    restart: unless-stopped
-    environment:
-      DB_SERVER_HOST: "10.7.0.10"          # VIP DB
-      MYSQL_DATABASE: "zabbix"
-      MYSQL_USER: "zabbix"
-      MYSQL_PASSWORD: "abcdef"
-      TZ: "Asia/Jakarta"
-      # HA
-      ZBX_HANODENAME: "DC1"
-      ZBX_NODEADDRESS: "10.7.0.4:10051"
-    networks:
-      - zbxnet
-    ports:
-      - "10051:10051"
-    cap_add:
-      - NET_RAW
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    healthcheck:
-      test: ["CMD", "pgrep", "zabbix_server"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # =========================
-  # Zabbix Frontend DC1
-  # =========================
-  zbx-frontend:
-    image: zabbix/zabbix-web-nginx-mysql:alpine-7.4-latest
-    container_name: zbx-frontend
     restart: unless-stopped
     environment:
       DB_SERVER_HOST: "10.7.0.10"
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "abcdef"
-      PHP_TZ: "Asia/Jakarta"
+      MYSQL_ROOT_PASSWORD: "abcdef"
+      TZ: "Asia/Jakarta"
+      # === HA ===
+      ZBX_HANODENAME: "DC1"            # = HANodeName
+      ZBX_NODEADDRESS: "zbx-server-01:10051" # = NodeAddress (IP DC1 sendiri)
+      # (Opsional) proses/tuning lain tetap sesuai kebutuhan
     networks:
       - zbxnet
     ports:
+      - "10051:10051"
+    cap_add:
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "pgrep", "zabbix_server"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Zabbix Frontend @ DC1 ---
+  zbx-frontend:
+    image: zabbix/zabbix-web-nginx-mysql:alpine-7.4-latest
+    container_name: zbx-frontend
+    restart: unless-stopped
+    environment:
+      # koneksi DB (VIP)
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "abcdef"
+      # zona waktu PHP
+      PHP_TZ: "Asia/Jakarta"
+      # ❗ Jangan set ZBX_SERVER_HOST / ZBX_SERVER_PORT pada mode HA
+    networks:
+      - zbxnet
+    # opsional: kalau frontend mau dipublikasikan dari DC1
+    ports:
       - "8080:8080"
+    # opsional: tunggu server jika di file ini ada service zbx-server-01
     depends_on:
       - zbx-server-01
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "pgrep", "php-fpm"]
       interval: 10s
@@ -789,60 +789,58 @@ networks:
     external: true
 
 services:
-  # =========================
-  # Zabbix Server DC2
-  # =========================
   zbx-server-02:
     image: zabbix/zabbix-server-mysql:alpine-7.4-latest
     container_name: zbx-server-02
-    restart: unless-stopped
-    environment:
-      DB_SERVER_HOST: "10.7.0.10"          # VIP DB
-      MYSQL_DATABASE: "zabbix"
-      MYSQL_USER: "zabbix"
-      MYSQL_PASSWORD: "abcdef"
-      TZ: "Asia/Jakarta"
-      # HA
-      ZBX_HANODENAME: "DC2"
-      ZBX_NODEADDRESS: "10.7.0.5:10051"
-    networks:
-      - zbxnet
-    ports:
-      - "10051:10051"
-    cap_add:
-      - NET_RAW
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    healthcheck:
-      test: ["CMD", "pgrep", "zabbix_server"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # =========================
-  # Zabbix Frontend DC2
-  # =========================
-  zbx-frontend:
-    image: zabbix/zabbix-web-nginx-mysql:alpine-7.4-latest
-    container_name: zbx-frontend
     restart: unless-stopped
     environment:
       DB_SERVER_HOST: "10.7.0.10"
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "abcdef"
-      PHP_TZ: "Asia/Jakarta"
+      MYSQL_ROOT_PASSWORD: "abcdef"
+      TZ: "Asia/Jakarta"
+      # === HA ===
+      ZBX_HANODENAME: "DC2"
+      ZBX_NODEADDRESS: "zbx-server-02:10051"
     networks:
       - zbxnet
     ports:
+      - "10051:10051"
+    cap_add:
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "pgrep", "zabbix_server"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- Zabbix Frontend @ DC2 ---
+  zbx-frontend:
+    image: zabbix/zabbix-web-nginx-mysql:alpine-7.4-latest
+    container_name: zbx-frontend
+    restart: unless-stopped
+    environment:
+      # koneksi DB (VIP)
+      DB_SERVER_HOST: "10.7.0.10"
+      MYSQL_DATABASE: "zabbix"
+      MYSQL_USER: "zabbix"
+      MYSQL_PASSWORD: "abcdef"
+      # zona waktu PHP
+      PHP_TZ: "Asia/Jakarta"
+      # ❗ Jangan set ZBX_SERVER_HOST / ZBX_SERVER_PORT pada mode HA
+    networks:
+      - zbxnet
+    # opsional: kalau frontend mau dipublikasikan dari DC2
+    ports:
       - "8080:8080"
+    # opsional: tunggu server jika di file ini ada service zbx-server-02
     depends_on:
       - zbx-server-02
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "pgrep", "php-fpm"]
       interval: 10s
       timeout: 5s
       retries: 5
+
 
