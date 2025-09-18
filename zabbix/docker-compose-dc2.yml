@@ -16,7 +16,7 @@ services:
       TZ: "Asia/Jakarta"
       # === HA ===
       ZBX_HANODENAME: "DC2"
-      ZBX_NODEADDRESS: "10.7.0.5:10051"
+      ZBX_NODEADDRESS: "zbx-server:10051"
     networks:
       - zbxnet
     ports:
