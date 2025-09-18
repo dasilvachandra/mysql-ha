@@ -1,22 +1,34 @@
-#!/bin/bash
-# Script otomatis git add, commit per file, lalu push sekali
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Ambil daftar file yang berubah (modified, new, deleted di working tree)
-FILES=$(git status --porcelain | awk '{print $2}')
+# Timestamp untuk pesan commit
+ts="$(date '+%Y-%m-%d %H:%M:%S')"
 
-if [ -z "$FILES" ]; then
-  echo "✅ Tidak ada perubahan file."
-  exit 0
+# Hitung total baris dalam repo (abaikan .git)
+total_lines=$(git ls-files | grep -v '^.git' | xargs cat 2>/dev/null | wc -l)
+
+# Hitung perubahan dari staging area
+stats=$(git diff --cached --shortstat || true)
+
+# Ambil angka insertions dan deletions
+insert=$(echo "$stats" | grep -o '[0-9]\+ insertion' | awk '{print $1}' || echo 0)
+delete=$(echo "$stats" | grep -o '[0-9]\+ deletion' | awk '{print $1}' || echo 0)
+
+# Total perubahan
+change=$((insert + delete))
+
+# Persentase perubahan (jaga jangan bagi nol)
+if [ "$total_lines" -gt 0 ]; then
+  percent=$((100 * change / total_lines))
+else
+  percent=0
 fi
 
-for FILE in $FILES; do
-  TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
-  echo "🔄 Menambahkan $FILE..."
-  git add "$FILE"
-  
-  echo "📝 Commit $FILE dengan pesan: update($FILE): $TIMESTAMP"
-  git commit -m "update($FILE): $TIMESTAMP"
-done
+# Tambahkan file dulu
+git add -A
 
-echo "🚀 Push semua commit ke remote (origin main)..."
-git push origin main
+# Commit dengan pesan ada timestamp & persen perubahan
+git commit -m "Auto commit $ts | Perubahan: $change lines (~$percent%)"
+
+# Push
+git push
