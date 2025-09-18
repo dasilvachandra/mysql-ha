@@ -17,7 +17,6 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-      - ../mysql/dc1.sql:/docker-entrypoint-initdb.d/dc1.sql:ro 
     # HANYA expose 3306 (tidak pakai host network)
     ports:
       - "3306:3306"
