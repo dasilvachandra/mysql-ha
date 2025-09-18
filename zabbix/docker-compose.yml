@@ -17,11 +17,11 @@ services:
       echo "[zbx-db-init] Waiting DB ${DB_SERVER_HOST}:${DB_SERVER_PORT}";
       until mysql -h${DB_SERVER_HOST} -P${DB_SERVER_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD} -e "SELECT 1" ${MYSQL_DATABASE} >/dev/null 2>&1; do
         sleep 2; echo -n .; done; echo;
-      cnt=$(mysql -N -h${DB_SERVER_HOST} -P${DB_SERVER_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD}
+      cnt=$$(mysql -N -h${DB_SERVER_HOST} -P${DB_SERVER_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD}
         -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${MYSQL_DATABASE}'");
-      echo "[zbx-db-init] Tables in ${MYSQL_DATABASE}: $cnt";
+      echo "[zbx-db-init] Tables in ${MYSQL_DATABASE}: $$cnt";
       if [ "${FORCE_REIMPORT}" = "1" ]; then cnt=0; fi;
-      if [ "$cnt" -lt 10 ]; then
+      if [ "$$cnt" -lt 10 ]; then
         echo "[zbx-db-init] Importing schema...";
         zcat /usr/share/doc/zabbix-sql-scripts/mysql/schema.sql.gz | \
           mysql -h${DB_SERVER_HOST} -P${DB_SERVER_PORT} -u${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE};
