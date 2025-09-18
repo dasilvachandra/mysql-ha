@@ -29,3 +29,4 @@ report_port=3306
 # Default karakter set
 character-set-server=utf8mb4
 collation-server=utf8mb4_general_ci
+log_bin_trust_function_creators
