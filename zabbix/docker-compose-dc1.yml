@@ -3,9 +3,9 @@ networks:
     external: true
 
 services:
-  zbx-server:
+  zbx-server-01:
     image: zabbix/zabbix-server-mysql:alpine-7.4-latest
-    container_name: zbx-server
+    container_name: zbx-server-01
     restart: unless-stopped
     environment:
       DB_SERVER_HOST: "10.7.0.10"
@@ -16,7 +16,7 @@ services:
       TZ: "Asia/Jakarta"
       # === HA ===
       ZBX_HANODENAME: "DC1"            # = HANodeName
-      ZBX_NODEADDRESS: "zbx-server:10051" # = NodeAddress (IP DC1 sendiri)
+      ZBX_NODEADDRESS: "zbx-server-01:10051" # = NodeAddress (IP DC1 sendiri)
       # (Opsional) proses/tuning lain tetap sesuai kebutuhan
     networks:
       - zbxnet
@@ -49,9 +49,9 @@ services:
     # opsional: kalau frontend mau dipublikasikan dari DC1
     ports:
       - "8080:8080"
-    # opsional: tunggu server jika di file ini ada service zbx-server
+    # opsional: tunggu server jika di file ini ada service zbx-server-01
     depends_on:
-      - zbx-server
+      - zbx-server-01
     healthcheck:
       test: ["CMD", "pgrep", "php-fpm"]
       interval: 10s
