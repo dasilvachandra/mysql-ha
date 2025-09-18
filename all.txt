@@ -53,6 +53,7 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ../mysql/dc1.sql:/docker-entrypoint-initdb.d/dc1.sql:ro 
     # HANYA expose 3306 (tidak pakai host network)
     ports:
       - "3306:3306"
@@ -103,7 +104,7 @@ services:
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
-      ZBX_SERVER_HOST: "127.0.0.1"
+      ZBX_SERVER_HOST: "zbx-server-dc1"
       PHP_TZ: "Asia/Jakarta"
     ports:
       - "8080:8080"                   # HAProxy konsumsi di 127.0.0.1:8080
@@ -119,6 +120,15 @@ services:
 global_defs {
   script_user root
   enable_script_security
+}
+
+# Cek MySQL DC1: sukses hanya jika read_only=0 (siap menulis)
+vrrp_script chk_mysql {
+  script "/etc/keepalived/scripts/is_primary.sh"
+  interval 5
+  timeout 3
+  fall 2        # butuh 2x gagal berturut-turut untuk dianggap down
+  rise 1        # sekali sehat langsung dianggap up
 }
 
 vrrp_instance VI_DB {
@@ -140,9 +150,26 @@ vrrp_instance VI_DB {
     10.7.0.5
   }
 
+  # VIP di atas WireGuard
   virtual_ipaddress {
     10.7.0.10/32 dev wg0 label wg0:vip
   }
+
+  # Pastikan hanya naik kalau MySQL writeable
+  track_script {
+    chk_mysql
+  }
+
+  # Opsional: pastikan interface wg0 juga dilacak
+  track_interface {
+    wg0
+  }
+
+  # Banjirkan GARP sesaat setelah jadi MASTER agar ARP table klien cepat update
+  garp_master_delay 1
+  garp_master_repeat 5
+  garp_master_refresh 10
+  garp_master_refresh_repeat 2
 
   notify_master "/etc/keepalived/scripts/notify.sh master"
   notify_backup "/etc/keepalived/scripts/notify.sh backup"
@@ -155,19 +182,27 @@ vrrp_instance VI_DB {
 After=network-online.target wg-quick@wg0.service
 Wants=network-online.target wg-quick@wg0.service
 
+====================== ./dc1/keepalived/scripts/demote_dc1.sql ======================
+-- Demote DC1 ke replica mengikuti VIP
+SET GLOBAL super_read_only=1;
+SET GLOBAL read_only=1;
+STOP REPLICA;
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO
+  SOURCE_HOST           = '10.7.0.10',
+  SOURCE_PORT           = 3306,
+  SOURCE_USER           = 'rep1',
+  SOURCE_PASSWORD       = 'abcdef',
+  SOURCE_AUTO_POSITION  = 1,
+  GET_SOURCE_PUBLIC_KEY = 1;
+START REPLICA;
+
+
 ====================== ./dc1/keepalived/scripts/is_primary.sh ======================
 #!/usr/bin/env bash
 set -euo pipefail
-MYSQL_HOST="127.0.0.1"
-MYSQL_USER="root"
-MYSQL_PASS="abcdef"
+docker exec -i mysql1 mysql -uroot -pabcdef -Nse "SELECT @@read_only" 2>/dev/null | grep -qx "0"
 
-# Hanya cek mysql hidup
-if mysqladmin ping -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" --silent; then
-    exit 0
-else
-    exit 1
-fi
 
 ====================== ./dc1/keepalived/scripts/notify.sh ======================
 #!/usr/bin/env bash
@@ -176,115 +211,70 @@ set -euo pipefail
 TYPE="${1:-}"
 LOG="/var/log/keepalived-notify.log"
 
-# ====== PARAM KONFIGURASI ======
-# VIP DB bersama
-VIP_DB="10.7.0.10"
-VIP_PORT="3306"
+# MySQL lokal (di container)
+MYSQL_CMD="docker exec -i mysql1 mysql -uroot -pabcdef"
 
-# DC1 (lokal)
-MYSQL_LOCAL_CONTAINER="mysql1"
-MYSQL_ROOT_PASS="abcdef"
+# MySQL remote (langsung TCP)
+REMOTE_MYSQL="mysql -h10.7.0.5 -uha -pHaPassw0rd! --connect-timeout=3"
 
-# DC2 (remote)
-REMOTE_HOST="10.7.0.5"
-MYSQL_REMOTE_CONTAINER="mysql2"
+# File SQL lokal (DC1) & remote (DC2)
+SQL_PROMOTE_LOCAL="/etc/keepalived/scripts/promote_dc1.sql"
+SQL_DEMOTE_LOCAL="/etc/keepalived/scripts/demote_dc1.sql"
+SQL_PROMOTE_REMOTE="/etc/keepalived/scripts/promote_dc2.sql"
+SQL_DEMOTE_REMOTE="/etc/keepalived/scripts/demote_dc2.sql"
+
+# Hub (opsional)
+HUB="10.7.0.1"
 SSH_OPTS="-o StrictHostKeyChecking=no -q -T"
 
-# Kredensial replika
-REPL_USER="rep1"
-REPL_PASS="abcdef"
+ts(){ date '+%F %T'; }
+log(){ echo "[$(ts)] $*" | tee -a "$LOG"; }
 
-# ====== HELPER ======
-ts() { date '+%F %T'; }
-
-log() { echo "[$(ts)] $*" | tee -a "$LOG" ; }
-
-mysql_local() {
-  docker exec -i "$MYSQL_LOCAL_CONTAINER" \
-    mysql -uroot -p"$MYSQL_ROOT_PASS" -Nse "$1"
+# Helper cek read_only remote
+remote_ro(){
+  mysql -h10.7.0.5 -uha -pHaPassw0rd! -Nse "SELECT @@read_only" 2>/dev/null || echo "ERR"
 }
 
-mysql_remote() {
-  # jalankan perintah mysql di DC2 via ssh + docker exec
-  ssh $SSH_OPTS "root@${REMOTE_HOST}" \
-    "docker exec -i ${MYSQL_REMOTE_CONTAINER} mysql -uroot -p'${MYSQL_ROOT_PASS}' -Nse \"$1\""
-}
-
-promote_local_writer() {
-  log "Promote DC1 ($MYSQL_LOCAL_CONTAINER) sebagai WRITER"
-  # Matikan replika jika ada, buang metadata replika, lalu buka write
-  mysql_local "STOP REPLICA; RESET REPLICA ALL;"
-  mysql_local "SET GLOBAL super_read_only=0; SET GLOBAL read_only=0;"
-  # Verifikasi
-  local ro
-  ro=$(mysql_local "SELECT @@read_only;")
-  if [[ "$ro" != "0" ]]; then
-    log "ERROR: DC1 gagal jadi writer (read_only=$ro)"; exit 1
-  fi
-  log "OK: DC1 sekarang WRITER (read_only=0)"
-}
-
-demote_local_replica_to_vip() {
-  log "Demote DC1 jadi REPLICA ke VIP ${VIP_DB}:${VIP_PORT}"
-  mysql_local "SET GLOBAL super_read_only=1; SET GLOBAL read_only=1;"
-  mysql_local "CHANGE REPLICATION SOURCE TO
-    SOURCE_HOST='${VIP_DB}', SOURCE_PORT=${VIP_PORT},
-    SOURCE_USER='${REPL_USER}', SOURCE_PASSWORD='${REPL_PASS}',
-    SOURCE_AUTO_POSITION=1, SOURCE_SSL=1;"
-  mysql_local "START REPLICA;"
-  # Cek singkat
-  local io sql
-  io=$(docker exec -i "$MYSQL_LOCAL_CONTAINER" mysql -uroot -p"$MYSQL_ROOT_PASS" -Nse "SHOW REPLICA STATUS\G" | awk -F': ' '/Replica_IO_Running/ {print $2}')
-  sql=$(docker exec -i "$MYSQL_LOCAL_CONTAINER" mysql -uroot -p"$MYSQL_ROOT_PASS" -Nse "SHOW REPLICA STATUS\G" | awk -F': ' '/Replica_SQL_Running/ {print $2}')
-  log "DC1 Replica status: IO=${io:-?}, SQL=${sql:-?}"
-}
-
-force_remote_replica_to_vip() {
-  log "Paksa DC2 jadi REPLICA (RO) ke VIP ${VIP_DB}:${VIP_PORT}"
-  mysql_remote "SET GLOBAL super_read_only=1; SET GLOBAL read_only=1;"
-  mysql_remote "CHANGE REPLICATION SOURCE TO
-    SOURCE_HOST='${VIP_DB}', SOURCE_PORT=${VIP_PORT},
-    SOURCE_USER='${REPL_USER}', SOURCE_PASSWORD='${REPL_PASS}',
-    SOURCE_AUTO_POSITION=1, SOURCE_SSL=1;"
-  mysql_remote "START REPLICA;"
-}
-
-force_remote_writer() {
-  log "Paksa DC2 jadi WRITER (matikan replika + buka write)"
-  mysql_remote "STOP REPLICA; RESET REPLICA ALL;"
-  mysql_remote "SET GLOBAL super_read_only=0; SET GLOBAL read_only=0;"
-}
-
-# ====== MAIN ======
 echo "[$(ts)] DC1 VRRP event: $TYPE" >> "$LOG"
 
 case "$TYPE" in
   master)
-    # 1) Arahkan route di hub → db1 (opsional, dari script kamu)
-    ssh $SSH_OPTS root@10.7.0.1 "switch-db-route.sh db1" >> "$LOG" 2>&1 || true
+    # 1) DEMOTE PEER dulu → replica ke VIP (anti dual-writer)
+    log "Demote DC2 ke REPLICA (VIP)"
+    if ! $REMOTE_MYSQL < "$SQL_DEMOTE_REMOTE" >> "$LOG" 2>&1; then
+      log "ERROR: demote DC2 gagal → ABORT promote (hindari dual-writer)"
+      exit 1
+    fi
+    rro="$(remote_ro)"
+    [[ "$rro" == "1" ]] || log "WARNING: verifikasi remote @@read_only=$rro"
 
-    # 2) Promote lokal (DC1) sebagai writer
-    promote_local_writer
+    # 2) PROMOTE lokal (DC1) jadi writer
+    log "Promote DC1 jadi WRITER"
+    $MYSQL_CMD < "$SQL_PROMOTE_LOCAL" >> "$LOG" 2>&1
 
-    # 3) Paksa DC2 jadi replica ke VIP (yang sekarang nempel di DC1)
-    force_remote_replica_to_vip
+    # 3) Switch route di HUB ke db1 (setelah writer siap)
+    ssh $SSH_OPTS "root@$HUB" "switch-db-route.sh db1" >> "$LOG" 2>&1 || true
 
     log "Sukses MASTER handler: DC1 WRITER, DC2 REPLICA"
     ;;
 
   backup)
-    log "DC1 masuk BACKUP → anggap DC2 MASTER"
-    # 1) Demote lokal (DC1) jadi replica ke VIP (yang mestinya nempel di DC2)
-    demote_local_replica_to_vip
+    # 1) DEMOTE lokal (DC1) → replica ke VIP
+    log "Demote DC1 ke REPLICA (VIP)"
+    $MYSQL_CMD < "$SQL_DEMOTE_LOCAL" >> "$LOG" 2>&1 || { log "ERROR: demote DC1 gagal"; exit 1; }
 
-    # 2) Paksa DC2 jadi writer (jaga-jaga kalau masih replica)
-    force_remote_writer
+    # 2) PROMOTE remote (DC2) jadi writer (best-effort)
+    log "Promote DC2 jadi WRITER"
+    $REMOTE_MYSQL < "$SQL_PROMOTE_REMOTE" >> "$LOG" 2>&1 || log "WARNING: promote DC2 gagal (cek manual)"
+
+    # 3) Switch route di HUB ke db2
+    ssh $SSH_OPTS "root@$HUB" "switch-db-route.sh db2" >> "$LOG" 2>&1 || true
 
     log "Sukses BACKUP handler: DC1 REPLICA, DC2 WRITER"
     ;;
 
   fault)
-    log "DC1 fault condition (no-op di sini)"
+    log "DC1 fault condition (no-op)"
     ;;
 
   *)
@@ -314,6 +304,14 @@ case "$TYPE" in
     echo "[$(date '+%F %T')] DC1 fault condition" >> "$LOG"
     ;;
 esac
+
+
+====================== ./dc1/keepalived/scripts/promote_dc1.sql ======================
+-- Promote DC1 (writer)
+STOP REPLICA;
+RESET REPLICA ALL;
+SET GLOBAL super_read_only=0;
+SET GLOBAL read_only=0;
 
 
 ====================== ./dc1/zabbix/Dockerfile ======================
@@ -350,6 +348,7 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ../mysql/dc2.sql:/docker-entrypoint-initdb.d/dc2.sql:ro 
     ports:
       - "3306:3306"
     healthcheck:
@@ -398,7 +397,7 @@ services:
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
-      ZBX_SERVER_HOST: "127.0.0.1"
+      ZBX_SERVER_HOST: "zbx-server-dc2"
       PHP_TZ: "Asia/Jakarta"
     ports:
       - "8080:8080"
@@ -414,6 +413,15 @@ services:
 global_defs {
   script_user root
   enable_script_security
+}
+
+# Cek MySQL DC2: sukses hanya jika read_only=0 (siap menulis)
+vrrp_script chk_mysql {
+  script "/etc/keepalived/scripts/is_primary.sh"
+  interval 5
+  timeout 3
+  fall 2
+  rise 1
 }
 
 vrrp_instance VI_DB {
@@ -438,6 +446,19 @@ vrrp_instance VI_DB {
   virtual_ipaddress {
     10.7.0.10/32 dev wg0 label wg0:vip
   }
+
+  track_script {
+    chk_mysql
+  }
+
+  track_interface {
+    wg0
+  }
+
+  garp_master_delay 1
+  garp_master_repeat 5
+  garp_master_refresh 10
+  garp_master_refresh_repeat 2
 
   notify_master "/etc/keepalived/scripts/notify.sh master"
   notify_backup "/etc/keepalived/scripts/notify.sh backup"
@@ -496,19 +517,27 @@ backend zabbix_web_local
     server localweb 127.0.0.1:8080 check inter 2s fall 3 rise 2
 
 
+====================== ./dc2/keepalived/scripts/demote_dc2.sql ======================
+-- Demote DC2 ke replica mengikuti VIP
+SET GLOBAL super_read_only=1;
+SET GLOBAL read_only=1;
+STOP REPLICA;
+RESET REPLICA ALL;
+CHANGE REPLICATION SOURCE TO
+  SOURCE_HOST           = '10.7.0.10',
+  SOURCE_PORT           = 3306,
+  SOURCE_USER           = 'rep1',
+  SOURCE_PASSWORD       = 'abcdef',
+  SOURCE_AUTO_POSITION  = 1,
+  GET_SOURCE_PUBLIC_KEY = 1;
+START REPLICA;
+
+
 ====================== ./dc2/keepalived/scripts/is_primary.sh ======================
 #!/usr/bin/env bash
 set -euo pipefail
-MYSQL_HOST="127.0.0.1"
-MYSQL_USER="root"
-MYSQL_PASS="abcdef"
+docker exec -i mysql2 mysql -uroot -pabcdef -Nse "SELECT @@read_only" 2>/dev/null | grep -qx "0"
 
-# Hanya cek mysql hidup
-if mysqladmin ping -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" --silent; then
-    exit 0
-else
-    exit 1
-fi
 
 ====================== ./dc2/keepalived/scripts/notify.sh ======================
 #!/usr/bin/env bash
@@ -517,109 +546,70 @@ set -euo pipefail
 TYPE="${1:-}"
 LOG="/var/log/keepalived-notify.log"
 
-# ====== PARAM KONFIGURASI ======
-VIP_DB="10.7.0.10"
-VIP_PORT="3306"
+# MySQL lokal (container di DC2)
+MYSQL_CMD="docker exec -i mysql2 mysql -uroot -pabcdef"
 
-# DC2 (lokal)
-MYSQL_LOCAL_CONTAINER="mysql2"
-MYSQL_ROOT_PASS="abcdef"
+# MySQL remote (langsung TCP ke DC1)
+REMOTE_MYSQL="mysql -h10.7.0.4 -uha -pHaPassw0rd! --connect-timeout=3"
 
-# DC1 (remote)
-REMOTE_HOST="10.7.0.4"
-MYSQL_REMOTE_CONTAINER="mysql1"
+# File SQL lokal (DC2) & remote (DC1)
+SQL_PROMOTE_LOCAL="/etc/keepalived/scripts/promote_dc2.sql"
+SQL_DEMOTE_LOCAL="/etc/keepalived/scripts/demote_dc2.sql"
+SQL_PROMOTE_REMOTE="/etc/keepalived/scripts/promote_dc1.sql"
+SQL_DEMOTE_REMOTE="/etc/keepalived/scripts/demote_dc1.sql"
+
+# Hub (opsional)
+HUB="10.7.0.1"
 SSH_OPTS="-o StrictHostKeyChecking=no -q -T"
 
-# Kredensial replika
-REPL_USER="rep1"
-REPL_PASS="abcdef"
+ts(){ date '+%F %T'; }
+log(){ echo "[$(ts)] $*" | tee -a "$LOG"; }
 
-# ====== HELPER ======
-ts() { date '+%F %T'; }
-log() { echo "[$(ts)] $*" | tee -a "$LOG" ; }
-
-mysql_local() {
-  docker exec -i "$MYSQL_LOCAL_CONTAINER" \
-    mysql -uroot -p"$MYSQL_ROOT_PASS" -Nse "$1"
+# Helper cek read_only remote (DC1)
+remote_ro(){
+  mysql -h10.7.0.4 -uha -pHaPassw0rd! -Nse "SELECT @@read_only" 2>/dev/null || echo "ERR"
 }
 
-mysql_remote() {
-  ssh $SSH_OPTS "root@${REMOTE_HOST}" \
-    "docker exec -i ${MYSQL_REMOTE_CONTAINER} mysql -uroot -p'${MYSQL_ROOT_PASS}' -Nse \"$1\""
-}
-
-promote_local_writer() {
-  log "Promote DC2 ($MYSQL_LOCAL_CONTAINER) sebagai WRITER"
-  mysql_local "STOP REPLICA; RESET REPLICA ALL;"
-  mysql_local "SET GLOBAL super_read_only=0; SET GLOBAL read_only=0;"
-  local ro
-  ro=$(mysql_local "SELECT @@read_only;")
-  if [[ "$ro" != "0" ]]; then
-    log "ERROR: DC2 gagal jadi writer (read_only=$ro)"; exit 1
-  fi
-  log "OK: DC2 sekarang WRITER (read_only=0)"
-}
-
-demote_local_replica_to_vip() {
-  log "Demote DC2 jadi REPLICA ke VIP ${VIP_DB}:${VIP_PORT}"
-  mysql_local "SET GLOBAL super_read_only=1; SET GLOBAL read_only=1;"
-  mysql_local "CHANGE REPLICATION SOURCE TO
-    SOURCE_HOST='${VIP_DB}', SOURCE_PORT=${VIP_PORT},
-    SOURCE_USER='${REPL_USER}', SOURCE_PASSWORD='${REPL_PASS}',
-    SOURCE_AUTO_POSITION=1, SOURCE_SSL=1;"
-  mysql_local "START REPLICA;"
-  local io sql
-  io=$(docker exec -i "$MYSQL_LOCAL_CONTAINER" mysql -uroot -p"$MYSQL_ROOT_PASS" -Nse "SHOW REPLICA STATUS\G" | awk -F': ' '/Replica_IO_Running/ {print $2}')
-  sql=$(docker exec -i "$MYSQL_LOCAL_CONTAINER" mysql -uroot -p"$MYSQL_ROOT_PASS" -Nse "SHOW REPLICA STATUS\G" | awk -F': ' '/Replica_SQL_Running/ {print $2}')
-  log "DC2 Replica status: IO=${io:-?}, SQL=${sql:-?}"
-}
-
-force_remote_replica_to_vip() {
-  log "Paksa DC1 jadi REPLICA (RO) ke VIP ${VIP_DB}:${VIP_PORT}"
-  mysql_remote "SET GLOBAL super_read_only=1; SET GLOBAL read_only=1;"
-  mysql_remote "CHANGE REPLICATION SOURCE TO
-    SOURCE_HOST='${VIP_DB}', SOURCE_PORT=${VIP_PORT},
-    SOURCE_USER='${REPL_USER}', SOURCE_PASSWORD='${REPL_PASS}',
-    SOURCE_AUTO_POSITION=1, SOURCE_SSL=1;"
-  mysql_remote "START REPLICA;"
-}
-
-force_remote_writer() {
-  log "Paksa DC1 jadi WRITER (matikan replika + buka write)"
-  mysql_remote "STOP REPLICA; RESET REPLICA ALL;"
-  mysql_remote "SET GLOBAL super_read_only=0; SET GLOBAL read_only=0;"
-}
-
-# ====== MAIN ======
 echo "[$(ts)] DC2 VRRP event: $TYPE" >> "$LOG"
 
 case "$TYPE" in
   master)
-    # (Opsional) Ubah routing di hub ke db2
-    ssh $SSH_OPTS root@10.7.0.1 "switch-db-route.sh db2" >> "$LOG" 2>&1 || true
+    # 1) DEMOTE PEER (DC1) dulu → replica ke VIP (anti dual-writer)
+    log "Demote DC1 ke REPLICA (VIP)"
+    if ! $REMOTE_MYSQL < "$SQL_DEMOTE_REMOTE" >> "$LOG" 2>&1; then
+      log "ERROR: demote DC1 gagal → ABORT promote (hindari dual-writer)"
+      exit 1
+    fi
+    rro="$(remote_ro)"
+    [[ "$rro" == "1" ]] || log "WARNING: verifikasi remote @@read_only=$rro"
 
-    # 1) Promote lokal (DC2) sebagai writer
-    promote_local_writer
+    # 2) PROMOTE lokal (DC2) jadi writer
+    log "Promote DC2 jadi WRITER"
+    $MYSQL_CMD < "$SQL_PROMOTE_LOCAL" >> "$LOG" 2>&1
 
-    # 2) Paksa DC1 jadi replica ke VIP (yang sekarang nempel di DC2)
-    force_remote_replica_to_vip
+    # 3) Switch route di HUB ke db2 (setelah writer siap)
+    ssh $SSH_OPTS "root@$HUB" "switch-db-route.sh db2" >> "$LOG" 2>&1 || true
 
     log "Sukses MASTER handler: DC2 WRITER, DC1 REPLICA"
     ;;
 
   backup)
-    log "DC2 masuk BACKUP → anggap DC1 MASTER"
-    # 1) Demote lokal (DC2) jadi replica ke VIP (yang mestinya nempel di DC1)
-    demote_local_replica_to_vip
+    # 1) DEMOTE lokal (DC2) → replica ke VIP
+    log "Demote DC2 ke REPLICA (VIP)"
+    $MYSQL_CMD < "$SQL_DEMOTE_LOCAL" >> "$LOG" 2>&1 || { log "ERROR: demote DC2 gagal"; exit 1; }
 
-    # 2) Paksa DC1 jadi writer (jaga-jaga kalau masih replica)
-    force_remote_writer
+    # 2) PROMOTE remote (DC1) jadi writer (best-effort)
+    log "Promote DC1 jadi WRITER"
+    $REMOTE_MYSQL < "$SQL_PROMOTE_REMOTE" >> "$LOG" 2>&1 || log "WARNING: promote DC1 gagal (cek manual)"
+
+    # 3) Switch route di HUB ke db1
+    ssh $SSH_OPTS "root@$HUB" "switch-db-route.sh db1" >> "$LOG" 2>&1 || true
 
     log "Sukses BACKUP handler: DC2 REPLICA, DC1 WRITER"
     ;;
 
   fault)
-    log "DC2 fault condition (no-op di sini)"
+    log "DC2 fault condition (no-op)"
     ;;
 
   *)
@@ -649,6 +639,14 @@ case "$TYPE" in
     echo "[$(date '+%F %T')] DC2 fault condition" >> "$LOG"
     ;;
 esac
+
+
+====================== ./dc2/keepalived/scripts/promote_dc2.sql ======================
+-- Promote DC2 (writer)
+STOP REPLICA;
+RESET REPLICA ALL;
+SET GLOBAL super_read_only=0;
+SET GLOBAL read_only=0;
 
 
 ====================== ./docs/README.md ======================
@@ -697,21 +695,45 @@ echo "✅ [$TIMESTAMP] Force pull selesai (sinkron dengan origin/main)"
 
 
 ====================== ./git-push.sh ======================
-#!/bin/bash
-# Script otomatis git add, commit, push dengan pesan timestamp
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Ambil timestamp sekarang
-TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
+ts="$(date '+%Y-%m-%d %H:%M:%S')"
 
-# Jalankan perintah git
-echo "🔄 Menambahkan file ke staging..."
-git add .
+# Ambil daftar file yang berubah (sudah di-tracked atau baru)
+files=$(git status --porcelain | awk '{print $2}')
 
-echo "📝 Commit dengan pesan: update: $TIMESTAMP"
-git commit -m "update: $TIMESTAMP"
+if [ -z "$files" ]; then
+  echo "✅ Tidak ada perubahan file."
+  exit 0
+fi
 
-echo "🚀 Push ke remote (origin main)..."
+# Hitung total baris repo untuk persentase
+total_lines=$(git ls-files | xargs cat 2>/dev/null | wc -l)
+
+for f in $files; do
+  # Stage file ini
+  git add "$f"
+
+  # Hitung perubahan baris file ini
+  stats=$(git diff --cached --numstat "$f" || true)
+  insert=$(echo "$stats" | awk '{print $1}')
+  delete=$(echo "$stats" | awk '{print $2}')
+  change=$((insert + delete))
+
+  if [ "$total_lines" -gt 0 ]; then
+    percent=$((100 * change / total_lines))
+  else
+    percent=0
+  fi
+
+  echo "📝 Commit $f dengan pesan: update($f) $ts | $change lines (~$percent%)"
+  git commit -m "update($f): $ts | Perubahan: $change lines (~$percent%)"
+done
+
+echo "🚀 Push semua commit ke remote (origin main)..."
 git push origin main
+
 
 ====================== ./list_files.sh ======================
 #!/bin/bash
@@ -780,6 +802,104 @@ RUN microdnf install -y iputils net-tools iproute dnsutils curl vim traceroute t
 CMD ["mysqld"]
 
 
+====================== ./mysql/dc1.sql ======================
+-- ======================================================
+-- DC1 bootstrap GTID auto-position replication (peer DC2: 10.7.0.5)
+-- Aman di-run berulang (idempotent)
+-- ======================================================
+
+-- 0) Opsional: tambah user HA untuk kontrol via MySQL TCP dari peer wg (10.7.x.x)
+CREATE USER IF NOT EXISTS 'ha'@'10.7.%' IDENTIFIED BY 'HaPassw0rd!';
+GRANT SYSTEM_USER, SYSTEM_VARIABLES_ADMIN, SESSION_VARIABLES_ADMIN, RELOAD,
+       REPLICATION SLAVE, REPLICATION CLIENT, PROCESS
+ON *.* TO 'ha'@'10.7.%';
+FLUSH PRIVILEGES;
+
+-- 1) Siapkan user replikasi (kalau belum ada)
+CREATE USER IF NOT EXISTS 'rep1'@'%' IDENTIFIED BY 'abcdef';
+GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'rep1'@'%';
+FLUSH PRIVILEGES;
+
+-- 2) Anti tabrakan AUTO_INCREMENT (DC1 = offset 1)
+--    (Persist agar bertahan setelah restart)
+SET PERSIST auto_increment_increment = 2;
+SET PERSIST auto_increment_offset    = 1;
+
+-- 3) Bersihkan sisa channel replikasi bila ada
+STOP REPLICA;
+RESET REPLICA ALL;
+
+-- 4) Subscribekan DC1 ke DC2 dengan GTID AUTO_POSITION
+--    (mengikuti binlog DC2; public key diambil otomatis jika pakai caching_sha2_password)
+CHANGE REPLICATION SOURCE TO
+  SOURCE_HOST           = '10.7.0.5',
+  SOURCE_PORT           = 3306,
+  SOURCE_USER           = 'rep1',
+  SOURCE_PASSWORD       = 'abcdef',
+  SOURCE_AUTO_POSITION  = 1,
+  GET_SOURCE_PUBLIC_KEY = 1;
+
+-- 5) Mulai replikasi
+START REPLICA;
+
+-- 6) (Opsional) Set REPLICA agar read-only jika peran node ini bukan writer
+--    Biarkan skrip failover (notify.sh) yang kontrol RO/RW saat produksi
+-- SET GLOBAL super_read_only=1; 
+-- SET GLOBAL read_only=1;
+
+-- 7) Verifikasi ringkas
+SHOW REPLICA STATUS\G
+SELECT @@server_id AS server_id, @@gtid_mode AS gtid_mode, @@enforce_gtid_consistency AS enforce_gtid_consistency\G
+
+
+====================== ./mysql/dc2.sql ======================
+-- ======================================================
+-- DC2 bootstrap GTID auto-position replication (peer DC1: 10.7.0.4)
+-- Aman di-run berulang (idempotent)
+-- ======================================================
+
+-- 0) Opsional: tambah user HA untuk kontrol via MySQL TCP dari peer wg (10.7.x.x)
+CREATE USER IF NOT EXISTS 'ha'@'10.7.%' IDENTIFIED BY 'HaPassw0rd!';
+GRANT SYSTEM_USER, SYSTEM_VARIABLES_ADMIN, SESSION_VARIABLES_ADMIN, RELOAD,
+       REPLICATION SLAVE, REPLICATION CLIENT, PROCESS
+ON *.* TO 'ha'@'10.7.%';
+FLUSH PRIVILEGES;
+
+-- 1) Siapkan user replikasi (kalau belum ada)
+CREATE USER IF NOT EXISTS 'rep1'@'%' IDENTIFIED BY 'abcdef';
+GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'rep1'@'%';
+FLUSH PRIVILEGES;
+
+-- 2) Anti tabrakan AUTO_INCREMENT (DC2 = offset 2)
+SET PERSIST auto_increment_increment = 2;
+SET PERSIST auto_increment_offset    = 2;
+
+-- 3) Bersihkan sisa channel replikasi bila ada
+STOP REPLICA;
+RESET REPLICA ALL;
+
+-- 4) Subscribekan DC2 ke DC1 dengan GTID AUTO_POSITION
+CHANGE REPLICATION SOURCE TO
+  SOURCE_HOST           = '10.7.0.4',
+  SOURCE_PORT           = 3306,
+  SOURCE_USER           = 'rep1',
+  SOURCE_PASSWORD       = 'abcdef',
+  SOURCE_AUTO_POSITION  = 1,
+  GET_SOURCE_PUBLIC_KEY = 1;
+
+-- 5) Mulai replikasi
+START REPLICA;
+
+-- 6) (Opsional) Set REPLICA agar read-only jika peran node ini bukan writer
+--    Biarkan skrip failover (notify.sh) yang kontrol RO/RW saat produksi
+-- SET GLOBAL super_read_only=1; 
+-- SET GLOBAL read_only=1;
+
+-- 7) Verifikasi ringkas
+SHOW REPLICA STATUS\G
+SELECT @@server_id AS server_id, @@gtid_mode AS gtid_mode, @@enforce_gtid_consistency AS enforce_gtid_consistency\G
+
+
 ====================== ./mysql/init-replica.sql ======================
 -- ======================================================
 -- Init script untuk konfigurasi DC2 sebagai replica DC1
@@ -839,6 +959,13 @@ relay_log_index=relay-bin.index
 master_info_repository=TABLE
 relay_log_info_repository=TABLE
 
+# Semi-sync replication (failover RPO rendah)
+plugin_load_add=semisync_master.so
+plugin_load_add=semisync_replication.so
+rpl_semi_sync_master_enabled=ON
+rpl_semi_sync_replica_enabled=ON
+rpl_semi_sync_master_timeout=1000   # 1s timeout menunggu ack replica
+
 # Optimasi & keamanan
 skip_name_resolve=ON
 binlog_checksum=NONE
@@ -872,6 +999,13 @@ relay_log=relay-bin
 relay_log_index=relay-bin.index
 master_info_repository=TABLE
 relay_log_info_repository=TABLE
+
+# Semi-sync replication (failover RPO rendah)
+plugin_load_add=semisync_master.so
+plugin_load_add=semisync_replication.so
+rpl_semi_sync_master_enabled=ON
+rpl_semi_sync_replica_enabled=ON
+rpl_semi_sync_master_timeout=1000
 
 # Optimasi & keamanan
 skip_name_resolve=ON
