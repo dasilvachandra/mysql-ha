@@ -121,14 +121,6 @@ global_defs {
   enable_script_security
 }
 
-vrrp_script chk_mysql_primary {
-  script "/etc/keepalived/scripts/is_primary.sh"
-  interval 3
-  timeout 2
-  rise 2
-  fall 2
-}
-
 vrrp_instance VI_DB {
   state BACKUP
   initial_state BACKUP
@@ -152,15 +144,11 @@ vrrp_instance VI_DB {
     10.7.0.10/32 dev wg0 label wg0:vip
   }
 
-  # Hanya pegang VIP kalau MySQL benar2 PRIMARY
-  track_script {
-    chk_mysql_primary
-  }
-
   notify_master "/etc/keepalived/scripts/notify.sh master"
   notify_backup "/etc/keepalived/scripts/notify.sh backup"
   notify_fault  "/etc/keepalived/scripts/notify.sh fault"
 }
+
 
 ====================== ./dc1/keepalived/keepalived.service.d/override.conf ======================
 [Unit]
@@ -170,23 +158,16 @@ Wants=network-online.target wg-quick@wg0.service
 ====================== ./dc1/keepalived/scripts/is_primary.sh ======================
 #!/usr/bin/env bash
 set -euo pipefail
-
 MYSQL_HOST="127.0.0.1"
 MYSQL_USER="root"
 MYSQL_PASS="abcdef"
 
-# 1) mysqld hidup?
-if ! mysqladmin ping -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" --silent; then
-  exit 1
+# Hanya cek mysql hidup
+if mysqladmin ping -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" --silent; then
+    exit 0
+else
+    exit 1
 fi
-
-# 2) node ini PRIMARY?
-ROLE="$(mysql -N -B -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" \
-  -e "SELECT MEMBER_ROLE FROM performance_schema.replication_group_members
-      WHERE MEMBER_HOST = @@report_host LIMIT 1;" 2>/dev/null || echo "")"
-
-[[ "$ROLE" == "PRIMARY" ]] && exit 0 || exit 2
-
 
 ====================== ./dc1/keepalived/scripts/notify.sh ======================
 #!/usr/bin/env bash
@@ -311,14 +292,6 @@ global_defs {
   enable_script_security
 }
 
-vrrp_script chk_mysql_primary {
-  script "/etc/keepalived/scripts/is_primary.sh"
-  interval 3
-  timeout 2
-  rise 2
-  fall 2
-}
-
 vrrp_instance VI_DB {
   state BACKUP
   initial_state BACKUP
@@ -342,14 +315,11 @@ vrrp_instance VI_DB {
     10.7.0.10/32 dev wg0 label wg0:vip
   }
 
-  track_script {
-    chk_mysql_primary
-  }
-
   notify_master "/etc/keepalived/scripts/notify.sh master"
   notify_backup "/etc/keepalived/scripts/notify.sh backup"
   notify_fault  "/etc/keepalived/scripts/notify.sh fault"
 }
+
 
 ====================== ./dc2/keepalived/keepalived.service.d/override.conf ======================
 global
@@ -405,23 +375,16 @@ backend zabbix_web_local
 ====================== ./dc2/keepalived/scripts/is_primary.sh ======================
 #!/usr/bin/env bash
 set -euo pipefail
-
 MYSQL_HOST="127.0.0.1"
 MYSQL_USER="root"
 MYSQL_PASS="abcdef"
 
-# 1) mysqld hidup?
-if ! mysqladmin ping -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" --silent; then
-  exit 1
+# Hanya cek mysql hidup
+if mysqladmin ping -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" --silent; then
+    exit 0
+else
+    exit 1
 fi
-
-# 2) node ini PRIMARY?
-ROLE="$(mysql -N -B -h"$MYSQL_HOST" -u"$MYSQL_USER" -p"$MYSQL_PASS" \
-  -e "SELECT MEMBER_ROLE FROM performance_schema.replication_group_members
-      WHERE MEMBER_HOST = @@report_host LIMIT 1;" 2>/dev/null || echo "")"
-
-[[ "$ROLE" == "PRIMARY" ]] && exit 0 || exit 2
-
 
 ====================== ./dc2/keepalived/scripts/notify.sh ======================
 #!/usr/bin/env bash
