@@ -18,13 +18,6 @@ relay_log_index=relay-bin.index
 master_info_repository=TABLE
 relay_log_info_repository=TABLE
 
-# Semi-sync replication (RPO rendah)
-plugin_load_add=semisync_source.so
-plugin_load_add=semisync_replica.so
-rpl_semi_sync_source_enabled=ON
-rpl_semi_sync_replica_enabled=ON
-rpl_semi_sync_source_timeout=1000   # 1s
-
 # Optimasi & keamanan
 skip_name_resolve=ON
 binlog_checksum=NONE
