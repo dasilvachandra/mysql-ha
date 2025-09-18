@@ -1,10 +1,20 @@
-FROM zabbix/zabbix-server-mysql:alpine-6.4-latest
+# Zabbix Server (MySQL) — pinned to 7.0 alpine
+FROM zabbix/zabbix-server-mysql:alpine-7.0-latest
 
-LABEL maintainer="Andes Solutions"
 
 USER root
-RUN apk add --no-cache bash curl vim iputils bind-tools net-tools iproute2 tcpdump
-USER zabbix
+RUN apk add --no-cache bash tzdata curl mysql-client \
+&& cp /usr/share/zoneinfo/Asia/Jakarta /etc/localtime \
+&& echo "Asia/Jakarta" > /etc/timezone
 
-EXPOSE 10051
-CMD ["docker-entrypoint.sh"]
+
+# Simple healthcheck: ensure DB reachable and zabbix_server responds
+ADD ./healthcheck-server.sh /usr/local/bin/healthcheck-server.sh
+RUN chmod +x /usr/local/bin/healthcheck-server.sh
+
+
+HEALTHCHECK --interval=20s --timeout=10s --retries=6 \
+CMD /usr/local/bin/healthcheck-server.sh
+
+
+# Keep default entrypoint/cmd from upstream

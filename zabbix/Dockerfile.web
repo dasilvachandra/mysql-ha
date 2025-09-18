@@ -1,10 +1,17 @@
-FROM zabbix/zabbix-web-nginx-mysql:alpine-6.4-latest
+# Zabbix Web (Nginx + PHP-FPM for MySQL) — pinned to 7.0 alpine
+FROM zabbix/zabbix-web-nginx-mysql:alpine-7.0-latest
 
-LABEL maintainer="Andes Solutions"
 
 USER root
-RUN apk add --no-cache bash curl vim iputils bind-tools net-tools iproute2 tcpdump
-USER zabbix
+RUN apk add --no-cache bash tzdata curl \
+&& cp /usr/share/zoneinfo/Asia/Jakarta /etc/localtime \
+&& echo "Asia/Jakarta" > /etc/timezone
 
-EXPOSE 8080
-CMD ["docker-entrypoint.sh"]
+
+# Healthcheck: hit local nginx
+ADD ./healthcheck-web.sh /usr/local/bin/healthcheck-web.sh
+RUN chmod +x /usr/local/bin/healthcheck-web.sh
+
+
+HEALTHCHECK --interval=20s --timeout=10s --retries=6 \
+CMD /usr/local/bin/healthcheck-web.sh
