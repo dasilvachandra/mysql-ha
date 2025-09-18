@@ -1,7 +1,11 @@
+networks:
+  zbxnet:
+    driver: bridge
+    external: true
 
 services:
   # =========================
-  # MySQL DC1 (10.7.0.4)
+  # MySQL DC1 (10.7.0.1)
   # =========================
   mysql1:
     build:
@@ -16,7 +20,8 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    # HANYA expose 3306 (tidak pakai host network)
+    networks:
+      - zbxnet
     ports:
       - "3306:3306"
     healthcheck:

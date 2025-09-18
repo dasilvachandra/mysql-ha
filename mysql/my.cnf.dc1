@@ -1,32 +1,25 @@
 [mysqld]
-# Identity
-server_id=1
-bind-address=0.0.0.0
+# ID unik untuk DC1
+server-id               = 1
 
-# Binary log wajib untuk replikasi
-log_bin=binlog
-binlog_format=ROW
-sync_binlog=1
+# Logging untuk replication
+log_bin                 = mysql-bin
+binlog_format           = ROW
+relay_log               = relay-log
+gtid_mode               = ON
+enforce_gtid_consistency= ON
+log_slave_updates       = ON
 
-# GTID (opsional tapi disarankan untuk failover otomatis/manual)
-gtid_mode=ON
-enforce_gtid_consistency=ON
+# Buffer & InnoDB
+innodb_flush_log_at_trx_commit = 1
+sync_binlog             = 1
 
-# Replikasi
-relay_log=relay-bin
-relay_log_index=relay-bin.index
-master_info_repository=TABLE
-relay_log_info_repository=TABLE
+# Charset default
+character-set-server    = utf8mb4
+collation-server        = utf8mb4_bin
 
-# Optimasi & keamanan
-skip_name_resolve=ON
-binlog_checksum=NONE
+# Penting untuk Zabbix
+default_authentication_plugin = mysql_native_password
 
-# Laporan host ke replica
-report_host=10.7.0.4
-report_port=3306
-
-# Default karakter set
-character-set-server=utf8mb4
-collation-server=utf8mb4_general_ci
-log_bin_trust_function_creators = 1
+# Network
+bind-address            = 0.0.0.0

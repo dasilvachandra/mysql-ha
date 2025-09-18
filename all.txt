@@ -80,10 +80,14 @@ echo "[SUCCESS] SQL $SQL_FILE berhasil dijalankan di $DC"
 
 
 ====================== ./dc1/docker-compose.yml ======================
+networks:
+  zbxnet:
+    driver: bridge
+    external: true
 
 services:
   # =========================
-  # MySQL DC1 (10.7.0.4)
+  # MySQL DC1 (10.7.0.1)
   # =========================
   mysql1:
     build:
@@ -98,7 +102,8 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    # HANYA expose 3306 (tidak pakai host network)
+    networks:
+      - zbxnet
     ports:
       - "3306:3306"
     healthcheck:
@@ -106,6 +111,7 @@ services:
       interval: 10s
       timeout: 3s
       retries: 20
+
 
 ====================== ./dc1/keepalived/keepalived.conf ======================
 global_defs {
@@ -195,6 +201,10 @@ SET GLOBAL read_only=0;
 
 
 ====================== ./dc2/docker-compose.yml ======================
+networks:
+  zbxnet:
+    driver: bridge
+    external: true
 
 services:
   # =========================
@@ -213,6 +223,8 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc2:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - zbxnet
     ports:
       - "3306:3306"
     healthcheck:
@@ -626,27 +638,6 @@ SHOW REPLICA STATUS\G
 
 
 ====================== ./mysql/init.sql ======================
--- ======================================================
--- Init script untuk MySQL HA + Zabbix
--- Akan dijalankan hanya sekali saat container pertama kali dibuat
--- ======================================================
-
--- 1. Buat user untuk replikasi antar DC
-DROP USER IF EXISTS 'rep1'@'%';
-CREATE USER 'rep1'@'%' IDENTIFIED BY 'abcdef';
-GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'rep1'@'%';
-
--- 2. Buat database untuk Zabbix
-DROP DATABASE IF EXISTS zabbix;
-CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-
--- 3. Buat user untuk Zabbix
-DROP USER IF EXISTS 'zabbix'@'%';
-CREATE USER 'zabbix'@'%' IDENTIFIED BY 'abcdef';
-GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'%';
-
--- 4. Commit privilege
-FLUSH PRIVILEGES;
 
 
 ====================== ./mysql/my.cnf.dc1 ======================
@@ -681,7 +672,7 @@ report_port=3306
 # Default karakter set
 character-set-server=utf8mb4
 collation-server=utf8mb4_general_ci
-
+log_bin_trust_function_creators = 1
 
 ====================== ./mysql/my.cnf.dc2 ======================
 [mysqld]
@@ -715,7 +706,7 @@ report_port=3306
 # Default karakter set
 character-set-server=utf8mb4
 collation-server=utf8mb4_general_ci
-
+log_bin_trust_function_creators
 
 ====================== ./rebuild.sh ======================
 #!/usr/bin/env bash
@@ -757,52 +748,50 @@ echo "🎉 Service $TARGET berhasil direbuild & dijalankan!"
 
 
 ====================== ./zabbix/docker-compose.yml ======================
-version: '3.5'
+networks:
+  zbxnet:
+    external: true
 
 services:
-  # =========================
-  # Zabbix Server (failover HA)
-  # =========================
-  zabbix-server:
-    image: zabbix/zabbix-server-mysql:ubuntu-7.4-latest
+  zbx-server:
+    image: zabbix/zabbix-server-mysql:alpine-7.4-latest
     container_name: zbx-server
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"      # VIP MySQL dari Keepalived
-      DB_SERVER_PORT: "3306"
+      DB_SERVER_HOST: "mysql1"
+      MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "abcdef"
-      MYSQL_DATABASE: "zabbix"
+      MYSQL_ROOT_PASSWORD: "abcdef"
       TZ: "Asia/Jakarta"
-      ZBX_HANODENAME: "${HOSTNAME}"    # Nama node HA (beda di DC1 & DC2)
-    ports:
-      - "10051:10051"                  # Zabbix Server trapper port
     networks:
-      - zbx-net
+      - zbxnet
+    ports:
+      - "10051:10051"
     cap_add:
-      - NET_RAW                         # supaya fping jalan untuk ICMP ping
+      - NET_RAW
+    depends_on:
+      - mysql1
+    healthcheck:
+      test: ["CMD", "pgrep", "zabbix_server"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # =========================
-  # Zabbix Web (Frontend)
-  # =========================
-  zabbix-web:
-    image: zabbix/zabbix-web-apache-mysql:ubuntu-7.4-latest
-    container_name: zbx-web
+  zbx-frontend:
+    image: zabbix/zabbix-web-nginx-mysql:alpine-7.4-latest
+    container_name: zbx-frontend
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "10.7.0.10"
-      DB_SERVER_PORT: "3306"
+      DB_SERVER_HOST: "mysql1"
+      MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "abcdef"
-      MYSQL_DATABASE: "zabbix"
       PHP_TZ: "Asia/Jakarta"
+    networks:
+      - zbxnet
+    depends_on:
+      - zbx-server
     ports:
       - "8080:8080"
-      - "8443:8443"
-    networks:
-      - zbx-net
-
-networks:
-  zbx-net:
-    driver: bridge
 
