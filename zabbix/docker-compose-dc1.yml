@@ -8,12 +8,13 @@ services:
     container_name: zbx-server
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "mysql1"   # pakai nama container mysql1 di dc1
+      DB_SERVER_HOST: "mysql1"
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "abcdef"
       MYSQL_ROOT_PASSWORD: "abcdef"
       TZ: "Asia/Jakarta"
+      ZBX_NODE_NAME: "DC1"      # ⬅️ Nama unik node HA
     networks:
       - zbxnet
     ports:
