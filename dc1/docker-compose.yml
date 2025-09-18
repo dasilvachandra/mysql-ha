@@ -1,11 +1,10 @@
 networks:
   zbxnet:
-    driver: bridge
     external: true
 
 services:
   # =========================
-  # MySQL DC1 (10.7.0.1)
+  # MySQL DC1 (10.7.0.4)
   # =========================
   mysql1:
     build:

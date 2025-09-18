@@ -1,6 +1,5 @@
 networks:
   zbxnet:
-    driver: bridge
     external: true
 
 services:
