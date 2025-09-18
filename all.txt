@@ -732,7 +732,7 @@ services:
     container_name: zbx-server
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "mysql1"
+      DB_SERVER_HOST: "mysql1"   # pakai nama container mysql1 di dc1
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "abcdef"
@@ -744,8 +744,6 @@ services:
       - "10051:10051"
     cap_add:
       - NET_RAW
-    depends_on:
-      - mysql1
     healthcheck:
       test: ["CMD", "pgrep", "zabbix_server"]
       interval: 10s
@@ -781,7 +779,7 @@ services:
     container_name: zbx-server
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "mysql2"
+      DB_SERVER_HOST: "mysql2"   # arahkan ke mysql2 di DC2
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "abcdef"
@@ -793,8 +791,6 @@ services:
       - "10051:10051"
     cap_add:
       - NET_RAW
-    depends_on:
-      - mysql2
     healthcheck:
       test: ["CMD", "pgrep", "zabbix_server"]
       interval: 10s
