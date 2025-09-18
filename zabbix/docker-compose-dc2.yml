@@ -14,7 +14,7 @@ services:
       MYSQL_PASSWORD: "abcdef"
       MYSQL_ROOT_PASSWORD: "abcdef"
       TZ: "Asia/Jakarta"
-      ZBX_NODE_NAME: "DC1"      # ⬅️ Nama unik node HA
+      ZBX_NODE_NAME: "DC2"      # ⬅️ Nama unik node HA
     networks:
       - zbxnet
     ports:
@@ -32,7 +32,7 @@ services:
     container_name: zbx-frontend
     restart: unless-stopped
     environment:
-      DB_SERVER_HOST: "mysql1"        # DC1 → mysql1, DC2 → mysql2
+      DB_SERVER_HOST: "10.7.0.10"        # DC1 → mysql1, DC2 → mysql2
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "abcdef"
