@@ -18,7 +18,7 @@ services:
       TZ: "Asia/Jakarta"
       # HA
       ZBX_HANODENAME: "DC1"
-      ZBX_NODEADDRESS: "zbx-server-01:10051"
+      ZBX_NODEADDRESS: "10.7.0.4:10051"
     networks:
       - zbxnet
     ports:
