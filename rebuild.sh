@@ -21,7 +21,7 @@ fi
 
 echo "🚀 Rebuild docker compose untuk: $TARGET"
 echo "========================================="
-docker network create zbxnet
+
 cd "$TARGET_DIR"
 
 echo "🔨 docker compose build..."
