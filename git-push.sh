@@ -3,29 +3,36 @@ set -euo pipefail
 
 ts="$(date '+%Y-%m-%d %H:%M:%S')"
 
-# Tambahkan file dulu ke staging
-git add -A
+# Ambil daftar file yang berubah (sudah di-tracked atau baru)
+files=$(git status --porcelain | awk '{print $2}')
 
-# Hitung total baris di repo
-total_lines=$(git ls-files | grep -v '^.git' | xargs cat 2>/dev/null | wc -l)
-
-# Hitung perubahan yang ada di staging
-stats=$(git diff --cached --shortstat || true)
-
-# Ambil angka insertions dan deletions
-insert=$(echo "$stats" | grep -o '[0-9]\+ insertion' | awk '{print $1}' || echo 0)
-delete=$(echo "$stats" | grep -o '[0-9]\+ deletion' | awk '{print $1}' || echo 0)
-
-change=$((insert + delete))
-
-if [ "$total_lines" -gt 0 ]; then
-  percent=$((100 * change / total_lines))
-else
-  percent=0
+if [ -z "$files" ]; then
+  echo "✅ Tidak ada perubahan file."
+  exit 0
 fi
 
-# Commit dengan detail
-git commit -m "Auto commit $ts | Perubahan: $change lines (~$percent%)"
+# Hitung total baris repo untuk persentase
+total_lines=$(git ls-files | xargs cat 2>/dev/null | wc -l)
 
-# Push sekali
+for f in $files; do
+  # Stage file ini
+  git add "$f"
+
+  # Hitung perubahan baris file ini
+  stats=$(git diff --cached --numstat "$f" || true)
+  insert=$(echo "$stats" | awk '{print $1}')
+  delete=$(echo "$stats" | awk '{print $2}')
+  change=$((insert + delete))
+
+  if [ "$total_lines" -gt 0 ]; then
+    percent=$((100 * change / total_lines))
+  else
+    percent=0
+  fi
+
+  echo "📝 Commit $f dengan pesan: update($f) $ts | $change lines (~$percent%)"
+  git commit -m "update($f): $ts | Perubahan: $change lines (~$percent%)"
+done
+
+echo "🚀 Push semua commit ke remote (origin main)..."
 git push origin main
