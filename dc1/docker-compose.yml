@@ -17,6 +17,7 @@ services:
       - /opt/mysql:/var/lib/mysql
       - ../mysql/my.cnf.dc1:/etc/mysql/conf.d/my.cnf:ro
       - ../mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ../mysql/dc1.sql:/docker-entrypoint-initdb.d/dc1.sql:ro 
     # HANYA expose 3306 (tidak pakai host network)
     ports:
       - "3306:3306"
@@ -67,7 +68,7 @@ services:
       MYSQL_DATABASE: "zabbix"
       MYSQL_USER: "zabbix"
       MYSQL_PASSWORD: "AndesZabbix!"
-      ZBX_SERVER_HOST: "127.0.0.1"
+      ZBX_SERVER_HOST: "zbx-server-dc1"
       PHP_TZ: "Asia/Jakarta"
     ports:
       - "8080:8080"                   # HAProxy konsumsi di 127.0.0.1:8080
